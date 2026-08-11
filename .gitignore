@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+native/livesplit-sidecar/target/
+
+# Artefatos de build. O curinga é largo de propósito: o padrão anterior era
+# `release-validation*/` e não pegava `release-signed-gate-validation/`, então um win-unpacked
+# inteiro do Electron entrou no primeiro commit — 215 MiB só no executável, mais as DLLs.
+# Toda pasta `release*` aqui é saída do electron-builder ou de script de conferência.
+release/
+release-*/

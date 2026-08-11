@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title data-i18n="overlay.title">Game Time Splitter Overlay</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="root" class="overlay is-idle">
+    <header id="drag-bar" class="drag-bar">
+      <div class="drag-handle" title="Drag to move" data-i18n-title="overlay.drag"></div>
+      <div class="drag-actions">
+        <button id="toggle-pin" class="chip" title="Keep above other windows" data-i18n="overlay.pin" data-i18n-title="overlay.pinTitle">Pinned</button>
+        <button id="toggle-click-through" class="chip" title="Ignore clicks; restore them from the main window" data-i18n="overlay.ignore" data-i18n-title="overlay.ignoreTitle">Ignore clicks</button>
+        <button id="close-overlay" class="chip danger" title="Close overlay" data-i18n="common.closeSymbol" data-i18n-title="overlay.closeTitle">×</button>
+      </div>
+    </header>
+
+    <main id="components" class="component-stack" aria-live="polite"></main>
+
+    <section id="finish-actions" class="finish-actions" hidden aria-hidden="true" aria-labelledby="finish-actions-title">
+      <strong id="finish-actions-title" data-i18n="finish.title">Run finished</strong>
+      <span class="finish-actions-hint" data-i18n="finish.hint">Choose what to do with the .lss file.</span>
+      <div class="finish-actions-buttons">
+        <button id="finish-overwrite" class="finish-button primary" type="button" data-i18n="finish.overwrite">Save and overwrite</button>
+        <button id="finish-save-as" class="finish-button" type="button" data-i18n="finish.saveAs">Save to a new file</button>
+        <button id="finish-discard" class="finish-button danger" type="button" data-i18n="finish.discard">Do not save</button>
+      </div>
+      <span id="finish-actions-status" class="finish-actions-status" role="status" aria-live="polite"></span>
+    </section>
+  </div>
+  <script src="i18n.js"></script>
+  <script src="overlay.js"></script>
+</body>
+</html>

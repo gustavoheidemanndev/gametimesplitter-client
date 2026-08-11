@@ -1,0 +1,46 @@
+appId: com.gametimespliter.desktop
+productName: Game Time Splitter
+copyright: Copyright © 2026 Gustavo Heidemann
+asar: true
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - src/renderer/**/*
+  - package.json
+extraResources:
+  - from: native/livesplit-sidecar/target/release/gametimespliter-sidecar.exe
+    to: native/gametimespliter-sidecar.exe
+  - from: build/icon.png
+    to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
+# Feed do auto-update. O provider generic faz o electron-builder gerar release/latest.yml
+# e gravar app-update.yml dentro do pacote, então o client não precisa de setFeedURL.
+# A URL precisa acompanhar DESKTOP_API_URL em src/shared/app-config.ts: o backend publica
+# esta pasta em express.static('public/downloads') (ver setupStaticFiles em backend/src/index.ts).
+# useMultipleRangeRequest: false porque o express não responde requisições multi-range,
+# que é o padrão do download diferencial do electron-updater.
+publish:
+  provider: generic
+  url: https://gametimesplitter-api.onrender.com/downloads
+  channel: latest
+  useMultipleRangeRequest: false
+win:
+  icon: icon.ico
+  executableName: GameTimeSplitter
+  requestedExecutionLevel: asInvoker
+  target:
+    - nsis
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  selectPerMachineByDefault: false
+  uninstallDisplayName: Game Time Splitter ${version}
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

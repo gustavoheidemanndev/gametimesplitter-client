@@ -1,0 +1,35 @@
+{
+  "name": "gametimespliter-desktop-client",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Cliente desktop para sincronizar tentativas do LiveSplit com o Game Time Splitter",
+  "author": {
+    "name": "Gustavo Heidemann",
+    "url": "https://github.com/gustavoheidemanndev"
+  },
+  "homepage": "https://github.com/gustavoheidemanndev/gametimesplitter-api",
+  "main": "dist/main/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build:sidecar": "cargo build --manifest-path native/livesplit-sidecar/Cargo.toml --release --locked",
+    "build:desktop": "tsc -p tsconfig.json",
+    "build": "npm run build:sidecar && npm run build:desktop",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate:icons": "powershell -NoProfile -ExecutionPolicy Bypass -File build/generate-icon.ps1",
+    "pack": "npm run generate:icons && npm run build && electron-builder --dir",
+    "dist": "npm run generate:icons && npm run build && electron-builder --win --publish never",
+    "publish:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File build/publish-to-backend.ps1",
+    "release": "npm run dist && npm run publish:backend"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9",
+    "fast-xml-parser": "5.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2"
+  }
+}

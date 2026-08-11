@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title data-i18n="app.title">Game Time Splitter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow" data-i18n="hero.eyebrow">GAME TIME SPLITTER</p>
+        <h1 data-i18n="hero.title">Native timer and synchronization</h1>
+        <p class="subtitle" data-i18n="hero.subtitle">Control your run with livesplit-core and synchronize attempts with the cloud.</p>
+      </div>
+      <span id="connection-badge" class="badge offline" data-i18n="connection.disconnected">Disconnected</span>
+    </header>
+
+    <section id="update-panel" class="panel update-panel hidden" hidden aria-hidden="true" aria-live="polite">
+      <div class="update-summary">
+        <div>
+          <strong id="update-title"></strong>
+          <p id="update-detail" class="muted"></p>
+        </div>
+        <button id="update-install" class="secondary hidden" hidden aria-hidden="true" type="button" data-i18n="update.installNow">Restart and update now</button>
+      </div>
+      <div id="update-progress" class="update-progress hidden" hidden aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="update-progress-bar"></div>
+      </div>
+    </section>
+
+    <section id="login-view" class="panel">
+      <h2 data-i18n="login.title">Sign in</h2>
+      <p class="muted" data-i18n="login.subtitle">Use the same credentials as the web platform.</p>
+      <form id="login-form">
+        <label><span data-i18n="login.identifier">Username or email</span>
+          <input id="identifier" autocomplete="username" required>
+        </label>
+        <label><span data-i18n="login.password">Password</span>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="check"><input id="remember" type="checkbox" checked> <span data-i18n="login.remember">Remember me on this computer</span></label>
+        <button type="submit" data-i18n="login.submit">Sign in</button>
+        <button id="continue-offline" type="button" class="secondary" data-i18n="login.offline">Use the timer offline</button>
+        <p class="muted" data-i18n="login.offlineHint">In offline mode, splits and attempts are saved on this computer and can be uploaded after signing in.</p>
+      </form>
+    </section>
+
+    <section id="app-view" class="hidden">
+      <div class="toolbar panel">
+        <div><strong id="user-name"></strong><span id="user-email" class="muted"></span></div>
+        <div class="row">
+          <span id="sidecar-badge" class="badge offline" data-i18n="timer.unavailable">Timer unavailable</span>
+          <button id="logout" class="secondary" data-i18n="user.logout">Sign out</button>
+        </div>
+      </div>
+
+      <section class="panel timer-panel">
+        <div class="main-timer-display">
+          <div class="timer-heading">
+            <div>
+              <p id="timer-game" class="timer-game" data-i18n="timer.noRun">No run loaded</p>
+              <p id="timer-category" class="muted" data-i18n="timer.selectLss">Select an .lss file</p>
+            </div>
+            <div class="timer-phase"><span id="timer-phase" data-i18n="timer.phase.notRunning">Stopped</span><small id="timer-attempts" data-i18n="timer.attemptsZero">0 attempts</small></div>
+          </div>
+          <div id="timer-clock" class="timer-clock hidden" hidden aria-hidden="true" data-i18n="timer.zero">00:00.000</div>
+          <div class="timer-splits-field">
+            <ol id="timer-segments" class="timer-segments"><li class="empty" data-i18n="timer.emptySegments">Segments will appear here.</li></ol>
+            <div class="timer-pb-summary" title="Cumulative time of the final Personal Best split" data-i18n-title="timer.pbFinalTitle">
+              <span data-i18n="timer.pbFinal">Final Personal Best</span>
+              <strong id="timer-pb-final" data-i18n="common.empty">—</strong>
+            </div>
+          </div>
+        </div>
+        <div class="timer-controls">
+          <button id="timer-start-split" hidden aria-hidden="true" disabled data-i18n="timer.start">Start</button>
+          <button id="timer-pause" class="secondary" hidden aria-hidden="true" disabled data-i18n="timer.pause">Pause</button>
+          <button id="timer-undo" class="secondary" hidden aria-hidden="true" disabled data-i18n="timer.undo">Undo</button>
+          <button id="timer-skip" class="secondary" hidden aria-hidden="true" disabled data-i18n="timer.skip">Skip</button>
+          <button id="timer-reset" class="danger" hidden aria-hidden="true" disabled data-i18n="timer.reset">Reset</button>
+        </div>
+        <div class="timer-controls">
+          <button id="toggle-overlay" class="secondary" data-i18n="overlay.open">Open OBS overlay</button>
+          <button id="restore-overlay-interaction" class="secondary" disabled data-i18n="overlay.restoreClicks">Restore overlay clicks</button>
+          <p class="muted overlay-hint" data-i18n="overlay.hint">Transparent borderless overlay. If you enable “Ignore clicks”, use this button to make it interactive again. In OBS, use Window Capture and select “Game Time Splitter - Overlay”.</p>
+        </div>
+        <div class="theme-toggles">
+          <label><input id="autosplit-startOnlyOnNewGame" type="checkbox" checked> <span data-i18n="autosplit.startOnlyOnNewGame">Start timer only on a new game</span></label>
+          <p class="muted overlay-hint" data-i18n="autosplit.startHint">Checked: the timer starts only when a new game begins from zero. Unchecked: it also starts when you open any save.</p>
+        </div>
+        <details class="theme-panel">
+          <summary data-i18n="theme.editor">Edit layout (LiveSplit style)</summary>
+          <div class="layout-editor">
+            <div class="layout-editor-toolbar">
+              <label><span data-i18n="theme.orientation">Orientation</span>
+                <select id="theme-layoutOrientation">
+                  <option value="vertical" data-i18n="theme.vertical">Vertical</option>
+                  <option value="horizontal" data-i18n="theme.horizontal">Horizontal</option>
+                </select>
+              </label>
+              <label><span data-i18n="theme.newComponent">New component</span>
+                <select id="layout-component-type">
+                  <option value="title" data-i18n="component.title">Title</option>
+                  <option value="splits" data-i18n="component.splits">Splits</option>
+                  <option value="timer" data-i18n="component.timer">Timer</option>
+                  <option value="previousSegment" data-i18n="component.previousSegment">Previous Segment</option>
+                  <option value="golds" data-i18n="component.golds">Gold</option>
+                  <option value="segmentPersonalBest" data-i18n="component.segmentPersonalBest">Segment Personal Best</option>
+                  <option value="sumOfBest" data-i18n="component.sumOfBest">Sum of Best</option>
+                  <option value="personalBest" data-i18n="component.personalBest">Personal Best</option>
+                  <option value="attempts" data-i18n="component.attempts">Attempts</option>
+                  <option value="money" data-i18n="component.money">Money</option>
+                  <option value="chapterKills" data-i18n="component.chapterKills">Chapter Kills</option>
+                  <option value="igt" data-i18n="component.igt">IGT</option>
+                  <option value="pauseBuffers" data-i18n="component.pauseBuffers">Pause Buffers</option>
+                  <option value="separator" data-i18n="component.separator">Separator</option>
+                </select>
+              </label>
+              <button id="layout-add-component" type="button" data-i18n="theme.add">Add</button>
+            </div>
+            <ol id="layout-components" class="layout-component-list"></ol>
+            <p class="muted layout-help" data-i18n="theme.help">The order in this list is the order shown in the window. Freely duplicate, rename, move, or remove each component.</p>
+          </div>
+          <h3 class="theme-section-title" data-i18n="theme.appearance">General and component appearance</h3>
+          <div class="theme-grid">
+            <label><span data-i18n="theme.language">Language</span>
+              <select id="theme-language">
+                <option value="en" data-i18n="language.en">English</option>
+                <option value="pt-BR" data-i18n="language.pt-BR">Português (Brasil)</option>
+                <option value="es" data-i18n="language.es">Español</option>
+              </select>
+            </label>
+            <label><span data-i18n="theme.preset">Preset</span>
+              <select id="theme-preset"><option value="" data-i18n="theme.custom">Custom</option></select>
+            </label>
+            <label><span data-i18n="theme.generalFont">General font</span>
+              <select id="theme-fontFamily"></select>
+            </label>
+            <label><span data-i18n="theme.timeFont">Time font</span>
+              <select id="theme-timeFontFamily"></select>
+            </label>
+            <label><span data-i18n="theme.generalWeight">General weight</span>
+              <input id="theme-fontWeight" type="number" min="100" max="900" step="100">
+            </label>
+            <label><span data-i18n="theme.timeWeight">Time weight</span>
+              <input id="theme-timeFontWeight" type="number" min="100" max="900" step="100">
+            </label>
+            <label><span data-i18n="theme.baseFont">Base font</span> <span data-value-for="theme-baseFontSize">13</span><span data-i18n="unit.px">px</span>
+              <input id="theme-baseFontSize" type="range" min="8" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.segmentsFont">Segments</span> <span data-value-for="theme-segmentFontSize">13</span><span data-i18n="unit.px">px</span>
+              <input id="theme-segmentFontSize" type="range" min="8" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.largeTime">Large time</span> <span data-value-for="theme-timeFontSize">52</span><span data-i18n="unit.px">px</span>
+              <input id="theme-timeFontSize" type="range" min="16" max="160" step="1">
+            </label>
+            <label><span data-i18n="theme.gameTitle">Game title</span> <span data-value-for="theme-gameFontSize">15</span><span data-i18n="unit.px">px</span>
+              <input id="theme-gameFontSize" type="range" min="8" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.category">Category</span> <span data-value-for="theme-categoryFontSize">11</span><span data-i18n="unit.px">px</span>
+              <input id="theme-categoryFontSize" type="range" min="8" max="30" step="1">
+            </label>
+            <label><span data-i18n="theme.footer">Footer</span> <span data-value-for="theme-footerFontSize">11</span><span data-i18n="unit.px">px</span>
+              <input id="theme-footerFontSize" type="range" min="8" max="30" step="1">
+            </label>
+            <label><span data-i18n="theme.padding">Inner spacing</span> <span data-value-for="theme-padding">12</span><span data-i18n="unit.px">px</span>
+              <input id="theme-padding" type="range" min="0" max="60" step="1">
+            </label>
+            <label><span data-i18n="theme.segmentHeight">Segment (height)</span> <span data-value-for="theme-segmentPadding">4</span><span data-i18n="unit.px">px</span>
+              <input id="theme-segmentPadding" type="range" min="0" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.segmentGap">Between segments</span> <span data-value-for="theme-segmentGap">1</span><span data-i18n="unit.px">px</span>
+              <input id="theme-segmentGap" type="range" min="0" max="20" step="1">
+            </label>
+            <label><span data-i18n="theme.sectionGap">Between sections</span> <span data-value-for="theme-sectionGap">8</span><span data-i18n="unit.px">px</span>
+              <input id="theme-sectionGap" type="range" min="0" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.corners">Corners</span> <span data-value-for="theme-borderRadius">10</span><span data-i18n="unit.px">px</span>
+              <input id="theme-borderRadius" type="range" min="0" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.timeSpacing">Time spacing</span> <span data-value-for="theme-timeLetterSpacing">-2</span><span data-i18n="unit.px">px</span>
+              <input id="theme-timeLetterSpacing" type="range" min="-10" max="10" step="1">
+            </label>
+            <label><span data-i18n="theme.backgroundOpacity">Background opacity</span> <span data-value-for="theme-backgroundOpacity">72</span><span data-i18n="unit.percent">%</span>
+              <input id="theme-backgroundOpacity" type="range" min="0" max="100" step="1">
+            </label>
+            <label><span data-i18n="theme.backgroundBlur">Background blur</span> <span data-value-for="theme-backgroundBlur">6</span><span data-i18n="unit.px">px</span>
+              <input id="theme-backgroundBlur" type="range" min="0" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.border">Border</span> <span data-value-for="theme-borderWidth">1</span><span data-i18n="unit.px">px</span>
+              <input id="theme-borderWidth" type="range" min="0" max="8" step="1">
+            </label>
+            <label class="color-input"><span data-i18n="theme.background">Background</span> <input id="theme-backgroundColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.border">Border</span> <input id="theme-borderColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.text">Text</span> <input id="theme-textColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.mutedText">Muted text</span> <input id="theme-mutedColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.accent">Accent</span> <input id="theme-accentColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.ahead">Ahead</span> <input id="theme-aheadColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.behind">Behind</span> <input id="theme-behindColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.gold">Gold</span> <input id="theme-goldColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.completedTimer">Completed timer</span> <input id="theme-completedTimerColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.activeSegment">Current segment</span> <input id="theme-activeRowColor" type="color"></label>
+            <label><span data-i18n="theme.timeAlignment">Time alignment</span>
+              <select id="theme-timeAlignment">
+                <option value="left" data-i18n="theme.left">Left</option>
+                <option value="center" data-i18n="theme.center">Center</option>
+                <option value="right" data-i18n="theme.right">Right</option>
+              </select>
+            </label>
+          </div>
+          <div class="theme-toggles">
+            <label><input id="theme-showGame" type="checkbox"> <span data-i18n="theme.showGame">Game title</span></label>
+            <label><input id="theme-showCategory" type="checkbox"> <span data-i18n="theme.showCategory">Category</span></label>
+            <label><input id="theme-showSegments" type="checkbox"> <span data-i18n="theme.showSegments">Segments</span></label>
+            <label><input id="theme-showDeltas" type="checkbox"> <span data-i18n="theme.showDeltas">Deltas (+/-)</span></label>
+            <label><input id="theme-showSegmentTime" type="checkbox"> <span data-i18n="theme.showSegmentTime">Time per segment</span></label>
+          <label><input id="theme-showSegmentTimer" type="checkbox"> <span data-i18n="theme.showSegmentTimer">Segment timer (counts from zero)</span></label>
+            <label><input id="theme-showPhase" type="checkbox"> <span data-i18n="theme.showPhase">Phase badge</span></label>
+            <label><input id="theme-showFooter" type="checkbox"> <span data-i18n="theme.showFooter">PB / attempts footer</span></label>
+            <label><input id="theme-compactTime" type="checkbox"> <span data-i18n="theme.compactTime">Compact time (without centiseconds)</span></label>
+            <label><input id="theme-uppercaseCategory" type="checkbox"> <span data-i18n="theme.uppercaseCategory">Uppercase category</span></label>
+          </div>
+          <div class="theme-actions">
+            <button id="theme-reset" class="secondary" type="button" data-i18n="theme.reset">Restore default</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel stack">
+        <div class="step"><span data-i18n="common.step1">1</span><div><h2 data-i18n="file.stepTitle">LiveSplit file</h2><p class="muted" data-i18n="file.stepHint">When selected, the .lss is loaded directly into the native timer.</p></div></div>
+        <div class="row">
+          <button id="select-file" data-i18n="file.selectLocal">Select local .lss</button>
+          <code id="file-path" data-i18n="file.noneSelected">No file selected</code>
+        </div>
+        <label><span data-i18n="file.account">File saved to your account</span>
+          <select id="cloud-lss-select" disabled><option value="" data-i18n="file.loginCloud">Sign in to load cloud files</option></select>
+        </label>
+        <div class="row">
+          <button id="load-cloud-lss" class="secondary" disabled data-i18n="file.download">Download and use in timer</button>
+          <span id="cloud-lss-status" class="muted" data-i18n="file.cloudHint">Files imported on the web will appear here.</span>
+        </div>
+        <div id="file-summary" class="summary hidden"></div>
+      </section>
+
+      <section class="panel stack">
+        <div class="step"><span data-i18n="common.step2">2</span><div><h2 data-i18n="game.stepTitle">Server game</h2><p class="muted" data-i18n="game.stepHint">Associate the file contents with the registered game.</p></div></div>
+        <label><span data-i18n="game.label">Game</span>
+          <select id="game-select"><option value="" data-i18n="game.select">Select a game</option></select>
+        </label>
+      </section>
+
+      <section class="panel stack">
+        <div class="step"><span data-i18n="common.step3">3</span><div><h2 data-i18n="sync.stepTitle">Automatic synchronization</h2><p class="muted" data-i18n="sync.stepHint">Always active. Every update is saved locally and sent automatically; without internet, it remains pending until the connection returns.</p></div></div>
+        <div class="row hidden" hidden aria-hidden="true">
+          <button id="start-monitor" data-i18n="sync.start">Start monitoring</button>
+          <button id="stop-monitor" class="secondary" disabled data-i18n="sync.stop">Stop</button>
+          <button id="sync-now" class="secondary" data-i18n="sync.now">Synchronize now</button>
+        </div>
+        <div class="metrics">
+          <div><strong id="pending-count" data-i18n="common.zero">0</strong><span data-i18n="sync.pending">Pending</span></div>
+          <div><strong id="synced-count" data-i18n="common.zero">0</strong><span data-i18n="sync.synchronized">Synchronized</span></div>
+          <div><strong id="monitor-status" data-i18n="sync.automatic">Automatic</strong><span data-i18n="sync.mode">Mode</span></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel log-panel">
+      <h2 data-i18n="activity.title">Activity</h2>
+      <ol id="activity-log"><li data-i18n="activity.ready">Ready to start.</li></ol>
+    </section>
+  </main>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
