@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "electron-updater": "6.8.9",
-    "fast-xml-parser": "5.10.0"
+    "fast-xml-parser": "^5.10.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
