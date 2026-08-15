@@ -26,6 +26,7 @@ import { parseLssFile } from './services/lss-parser';
 import {
   OverlayThemeStore,
   type MissingThemeFallback,
+  type OverlayThemeOwnerContext,
 } from './services/overlay-theme-store';
 import { OverlayThemeSync } from './services/overlay-theme-sync';
 import { RaceSync } from './services/race-sync';
@@ -33,6 +34,7 @@ import { SessionStore } from './services/session-store';
 import { OFFLINE_QUEUE_OWNER_ID, SyncQueue } from './services/sync-queue';
 import { TimerSidecar, unavailableTimerState } from './services/timer-sidecar';
 import {
+  applyOverlayThemePreset,
   defaultOverlayTheme,
   overlayThemePresets,
   type OverlayTheme,
@@ -549,10 +551,7 @@ const normalizeDraftId = (value: unknown): string => {
 
 const overlayThemeDraftIsCurrent = (context: OverlayThemeDraftContext): boolean => {
   const storeOwner = overlayThemeStore.getOwnerContext();
-  return context.ownerGeneration === overlayThemeOwnerGeneration &&
-    context.ownerId === overlayThemeOwnerId &&
-    context.ownerId === api.getSession()?.user.id &&
-    context.storeOwnerGeneration === storeOwner.generation &&
+  return context.storeOwnerGeneration === storeOwner.generation &&
     context.ownerId === storeOwner.ownerId;
 };
 
@@ -567,13 +566,8 @@ const beginOverlayThemeDraft = (rawDraftId: unknown): boolean => {
   }
 
   const storeOwner = overlayThemeStore.getOwnerContext();
-  const ownerId = api.getSession()?.user.id;
-  if (ownerId !== overlayThemeOwnerId || ownerId !== storeOwner.ownerId) {
-    throw new Error('Aguarde o tema da conta ativa terminar de carregar.');
-  }
-
   overlayThemeDrafts.set(draftId, {
-    ownerId,
+    ownerId: storeOwner.ownerId,
     ownerGeneration: overlayThemeOwnerGeneration,
     storeOwnerGeneration: storeOwner.generation,
   });
@@ -588,6 +582,18 @@ const getOverlayThemeDraft = (rawDraftId: unknown): OverlayThemeDraftContext => 
     throw new Error('Esta edição foi cancelada porque a conta ativa mudou.');
   }
   return context;
+};
+
+const resolveThemeMutationOwner = (rawDraftId: unknown): OverlayThemeOwnerContext => {
+  const storeOwner = overlayThemeStore.getOwnerContext();
+  const current = { ownerId: storeOwner.ownerId, generation: storeOwner.generation };
+  if (rawDraftId === undefined || rawDraftId === null || rawDraftId === '') return current;
+  try {
+    const context = getOverlayThemeDraft(rawDraftId);
+    return { ownerId: context.ownerId, generation: context.storeOwnerGeneration };
+  } catch {
+    return current;
+  }
 };
 
 const endOverlayThemeDraft = (rawDraftId: unknown): boolean => {
@@ -653,6 +659,39 @@ const createOverlayWindow = (): BrowserWindow => {
   });
   void overlayWindow.loadFile(path.join(app.getAppPath(), 'src', 'renderer', 'overlay.html'));
   return overlayWindow;
+};
+
+const timerPreventsFileSwap = (): boolean =>
+  timerState.available && (timerState.phase === 'running' || timerState.phase === 'paused' || timerState.phase === 'ended');
+
+const cloudFileAlreadyLoaded = (fileId: string): boolean =>
+  Boolean(selectedFile && selectedFile.toLocaleLowerCase().includes(`-${fileId.toLocaleLowerCase()}.lss`));
+
+const loadCloudFileIntoTimer = async (rawId: string) => {
+  const session = api.getSession();
+  if (!session) throw new Error('Faça login para baixar um arquivo .lss da nuvem.');
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(rawId)) {
+    throw new Error('Identificador do arquivo .lss inválido.');
+  }
+
+  const cloudFile = await api.getLssFile(rawId);
+  const content = await api.downloadLssFile(rawId);
+  if (api.getSession()?.user.id !== session.user.id) {
+    throw new Error('A conta ativa mudou durante o download do arquivo .lss.');
+  }
+  const filePath = await cloudLssStore.save(session.user.id, cloudFile, content);
+  const parsed = await parseLssFile(filePath);
+  await executeTimerCommand('load', { path: filePath });
+  await adoptSelectedFile(filePath);
+  await store.savePreferences(filePath, cloudFile.gameId);
+  await scheduleAutomaticMonitoring('arquivo da nuvem carregado');
+  sendEvent({
+    type: 'file-read',
+    message: `Arquivo “${cloudFile.originalName}” baixado da nuvem e carregado no timer.`,
+    data: { filePath, parsed, cloudFile },
+  });
+  sendState('Arquivo .lss da nuvem carregado no timer nativo.');
+  return { filePath, parsed, cloudFile };
 };
 
 const registerIpcHandlers = (): void => {
@@ -782,6 +821,21 @@ const registerIpcHandlers = (): void => {
     if (!game) throw new Error('O jogo selecionado não está disponível no servidor.');
     await store.savePreferences(selectedFile, game.id);
     if (activeAttempt?.ownerId === session.user.id) activeAttempt.gameId = game.id;
+    if (!timerPreventsFileSwap()) {
+      try {
+        const files = await api.getLssFiles();
+        const primary = files.find((file) => file.gameId === game.id && file.isPrimary)
+          ?? files.find((file) => file.gameId === game.id);
+        if (primary && !cloudFileAlreadyLoaded(primary.id)) {
+          await loadCloudFileIntoTimer(primary.id);
+        }
+      } catch (error) {
+        sendEvent({
+          type: 'error',
+          message: `Não foi possível carregar o .lss principal da overlay: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    }
     await scheduleAutomaticMonitoring('jogo associado');
     sendState(`Sincronização automática associada a ${game.name} — ${game.category}.`);
     return getState();
@@ -821,25 +875,7 @@ const registerIpcHandlers = (): void => {
     if (typeof rawId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(rawId)) {
       throw new Error('Identificador do arquivo .lss inválido.');
     }
-
-    const cloudFile = await api.getLssFile(rawId);
-    const content = await api.downloadLssFile(rawId);
-    if (api.getSession()?.user.id !== session.user.id) {
-      throw new Error('A conta ativa mudou durante o download do arquivo .lss.');
-    }
-    const filePath = await cloudLssStore.save(session.user.id, cloudFile, content);
-    const parsed = await parseLssFile(filePath);
-    await executeTimerCommand('load', { path: filePath });
-    await adoptSelectedFile(filePath);
-    await store.savePreferences(filePath, cloudFile.gameId);
-    await scheduleAutomaticMonitoring('arquivo da nuvem carregado');
-    sendEvent({
-      type: 'file-read',
-      message: `Arquivo “${cloudFile.originalName}” baixado da nuvem e carregado no timer.`,
-      data: { filePath, parsed, cloudFile },
-    });
-    sendState('Arquivo .lss da nuvem carregado no timer nativo.');
-    return { filePath, parsed, cloudFile };
+    return loadCloudFileIntoTimer(rawId);
   });
 
   ipcMain.handle('lss:start-monitoring', async (_event, request: MonitorRequest) => {
@@ -899,14 +935,10 @@ const registerIpcHandlers = (): void => {
     _event,
     request: { partial?: Partial<OverlayTheme>; draftId?: unknown } | null
   ) => {
-    const context = getOverlayThemeDraft(request?.draftId);
-    const theme = await overlayThemeStore.update(request?.partial ?? {}, {
-      ownerId: context.ownerId,
-      generation: context.storeOwnerGeneration,
-    });
-    if (!overlayThemeDraftIsCurrent(context)) {
-      throw new Error('Esta edição foi cancelada porque a conta ativa mudou.');
-    }
+    const theme = await overlayThemeStore.update(
+      request?.partial ?? {},
+      resolveThemeMutationOwner(request?.draftId)
+    );
     broadcastTheme(theme);
     overlayThemeSync.queueUpload(theme);
     return theme;
@@ -915,14 +947,7 @@ const registerIpcHandlers = (): void => {
     _event,
     request: { draftId?: unknown } | null
   ) => {
-    const context = getOverlayThemeDraft(request?.draftId);
-    const theme = await overlayThemeStore.reset({
-      ownerId: context.ownerId,
-      generation: context.storeOwnerGeneration,
-    });
-    if (!overlayThemeDraftIsCurrent(context)) {
-      throw new Error('Esta edição foi cancelada porque a conta ativa mudou.');
-    }
+    const theme = await overlayThemeStore.reset(resolveThemeMutationOwner(request?.draftId));
     broadcastTheme(theme);
     overlayThemeSync.queueUpload(theme);
     return theme;
@@ -931,19 +956,13 @@ const registerIpcHandlers = (): void => {
     _event,
     request: { name?: unknown; draftId?: unknown } | null
   ) => {
-    const context = getOverlayThemeDraft(request?.draftId);
     const presetName = typeof request?.name === 'string' ? request.name : '';
+    const current = overlayThemeStore.get();
     const preset = overlayThemePresets[presetName] ?? defaultOverlayTheme;
     const theme = await overlayThemeStore.replace(
-      { ...preset, language: overlayThemeStore.get().language },
-      {
-        ownerId: context.ownerId,
-        generation: context.storeOwnerGeneration,
-      }
+      applyOverlayThemePreset(preset, current),
+      resolveThemeMutationOwner(request?.draftId)
     );
-    if (!overlayThemeDraftIsCurrent(context)) {
-      throw new Error('Esta edição foi cancelada porque a conta ativa mudou.');
-    }
     broadcastTheme(theme);
     overlayThemeSync.queueUpload(theme);
     return theme;

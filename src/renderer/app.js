@@ -468,8 +468,16 @@ const loadCloudLssFiles = async () => {
     select.replaceChildren(new Option(t('cloud.select'), ''));
     cloudLssFiles.forEach((file) => {
       const pb = file.personalBestTime == null ? t('cloud.withoutPb') : `${t('cloud.pb')} ${formatTime(file.personalBestTime)}`;
-      select.add(new Option(`${file.originalName} — ${file.gameName} / ${file.categoryName} — ${pb}`, file.id));
+      const primary = file.isPrimary ? ` — ${t('cloud.primary')}` : '';
+      select.add(new Option(`${file.originalName} — ${file.gameName} / ${file.categoryName} — ${pb}${primary}`, file.id));
     });
+    const selectedGameId = byId('game-select').value;
+    const preferred = cloudLssFiles.find((file) => file.gameId === selectedGameId && file.isPrimary)
+      ?? cloudLssFiles.find((file) => file.isPrimary);
+    if (preferred) {
+      select.value = preferred.id;
+      byId('load-cloud-lss').disabled = !state?.authenticated;
+    }
     if (cloudLssFiles.length) setCloudStatus('cloud.available', { count: cloudLssFiles.length });
     else setCloudStatus('cloud.none');
   } catch (error) {
@@ -553,6 +561,7 @@ byId('game-select').addEventListener('change', async (event) => {
   select.disabled = true;
   try {
     updateState(await bridge.selectGame(select.value));
+    if (select.value) await loadCloudLssFiles();
     addLog(t(select.value ? 'log.game.linked' : 'log.game.select'));
   } catch (error) {
     addLog(t('log.game.failed', { error: errorMessage(error) }), true);
@@ -888,9 +897,16 @@ const scheduleThemeUpdate = () => {
     const partial = collectThemeFromInputs();
     themeState.savingDrafts.add(draft.id);
     try {
-      await draft.beginPromise;
+      try {
+        await draft.beginPromise;
+      } catch {
+        // Local save must not depend on a live API session or draft registration.
+      }
       const updated = await bridge.updateOverlayTheme(partial, draft.id);
-      if (revision === themeState.revision) themeState.current = updated;
+      if (revision === themeState.revision) {
+        themeState.current = updated;
+        renderLayoutEditor();
+      }
     } catch (error) {
       addLog(t('log.theme.saveFailed', { error: errorMessage(error) }), true);
     } finally {
@@ -913,7 +929,11 @@ const runImmediateThemeMutation = async (mutation) => {
   const draft = createThemeDraft();
   themeState.savingDrafts.add(draft.id);
   try {
-    await draft.beginPromise;
+    try {
+      await draft.beginPromise;
+    } catch {
+      // Presets/reset still save locally if the sync draft could not start.
+    }
     return await mutation(draft.id);
   } finally {
     themeState.savingDrafts.delete(draft.id);

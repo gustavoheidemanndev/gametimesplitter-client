@@ -48,6 +48,7 @@ export interface CloudLssFile {
   platform: string;
   attemptCount: number;
   personalBestTime: number | null;
+  isPrimary?: boolean;
   createdAt: string;
   updatedAt: string;
   segments: CloudLssFileSegment[];
