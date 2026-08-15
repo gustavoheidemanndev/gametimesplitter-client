@@ -4,6 +4,8 @@
   --time-font-family: Consolas, monospace;
   --font-weight: 600;
   --time-font-weight: 800;
+  --font-style: normal;
+  --time-font-style: normal;
   --base-font-size: 13px;
   --segment-font-size: 13px;
   --time-font-size: 52px;
@@ -41,7 +43,7 @@ button { font: inherit; color: inherit; }
   width: 100%; height: 100%; padding: var(--padding);
   background: var(--bg); border: var(--border-width) solid var(--edge);
   border-radius: var(--border-radius); backdrop-filter: blur(var(--bg-blur));
-  color: var(--text); font: var(--font-weight) var(--base-font-size)/1.2 var(--font-family);
+  color: var(--text); font: var(--font-style) var(--font-weight) var(--base-font-size)/1.2 var(--font-family);
   font-variant-numeric: tabular-nums;
 }
 .overlay.no-blur { backdrop-filter: none; }
@@ -83,9 +85,9 @@ button { font: inherit; color: inherit; }
 .segments li.active { background: var(--row-active); box-shadow: inset 3px 0 var(--active-color); font-weight: 700; }
 .segments li.empty { display: block; padding: 12px; color: var(--muted); text-align: center; }
 .segments .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.segments .delta, .segments .split-time { color: var(--muted); font-family: var(--time-font-family); }
+.segments .delta, .segments .split-time { color: var(--muted); font-family: var(--time-font-family); font-style: var(--time-font-style); }
 .split-pb-summary { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 6px; border-bottom: 1px solid var(--edge); color: var(--muted); background: color-mix(in srgb, var(--accent) 9%, transparent); font-size: var(--footer-font-size); font-weight: 800; }
-.split-pb-time { color: var(--text); font-family: var(--time-font-family); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.split-pb-time { color: var(--text); font-family: var(--time-font-family); font-style: var(--time-font-style); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .segments .ahead, .stat-value.ahead { color: var(--ahead); }
 .segments .behind, .stat-value.behind { color: var(--behind); }
 .segments .gold, .stat-value.gold { color: var(--gold); }
@@ -93,7 +95,7 @@ button { font: inherit; color: inherit; }
 .component-timer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 8px; padding: 2px 5px; }
 .time-left .component-timer { grid-template-columns: auto minmax(0, 1fr); }
 .time-center .component-timer { grid-template-columns: 1fr; justify-items: center; }
-.timer-value { width: 100%; color: var(--text); font: var(--time-font-weight) var(--time-font-size)/.95 var(--time-font-family); letter-spacing: var(--time-letter-spacing); text-align: var(--time-align); white-space: nowrap; }
+.timer-value { width: 100%; color: var(--text); font: var(--time-font-style) var(--time-font-weight) var(--time-font-size)/.95 var(--time-font-family); letter-spacing: var(--time-letter-spacing); text-align: var(--time-align); white-space: nowrap; }
 .timer-value.running { color: var(--ahead); }
 .timer-value.paused { color: var(--muted); }
 .timer-value.ended { color: var(--completed-timer-color); }
@@ -104,7 +106,7 @@ button { font: inherit; color: inherit; }
 .segment-timer {
   grid-column: 1 / -1;
   color: var(--muted);
-  font: var(--time-font-weight) calc(var(--time-font-size) * .42)/1 var(--time-font-family);
+  font: var(--time-font-style) var(--time-font-weight) calc(var(--time-font-size) * .42)/1 var(--time-font-family);
   letter-spacing: var(--time-letter-spacing);
   text-align: var(--time-align);
   white-space: nowrap;
@@ -114,7 +116,7 @@ button { font: inherit; color: inherit; }
    concluído, que é um resultado e não uma medida em movimento. */
 .segments .delta.live { font-style: italic; }
 .component-stat { display: flex; justify-content: space-between; gap: 12px; padding: 5px 7px; border-bottom: 1px solid var(--edge); color: var(--muted); font-size: var(--footer-font-size); }
-.component-stat .stat-value { color: var(--text); font-family: var(--time-font-family); font-weight: 700; text-align: right; }
+.component-stat .stat-value { color: var(--text); font-family: var(--time-font-family); font-style: var(--time-font-style); font-weight: 700; text-align: right; }
 .hide-footer .component-personalBest, .hide-footer .component-attempts { display: none; }
 .component-separator { height: 1px; margin: 3px 0; background: var(--edge); }
 .orientation-horizontal .component-separator { min-width: 1px; width: 1px; height: auto; margin: 0 3px; flex: 0 0 1px; }

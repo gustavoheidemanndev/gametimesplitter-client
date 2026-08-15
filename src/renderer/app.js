@@ -666,41 +666,51 @@ const closeThemeDraft = async (draft) => {
     // A troca de conta já invalida o draft no processo principal.
   }
 };
-const FONT_CHOICES = [
-  'Segoe UI, Inter, system-ui, sans-serif',
-  'Inter, sans-serif',
-  'Arial, sans-serif',
-  'Verdana, sans-serif',
-  'Tahoma, sans-serif',
-  'Georgia, serif',
-  '"Times New Roman", serif',
-  '"Segoe UI", sans-serif',
-  '"Courier New", monospace',
-  'Consolas, monospace',
-  '"Cascadia Mono", monospace',
-  'monospace',
-];
-const TIME_FONT_CHOICES = [
-  'Consolas, "Cascadia Mono", "Courier New", monospace',
-  '"Cascadia Mono", monospace',
-  '"Courier New", monospace',
-  '"Roboto Mono", monospace',
-  '"Fira Code", monospace',
-  'Consolas, monospace',
-  'Segoe UI, sans-serif',
-  'Arial, sans-serif',
-];
+const FONT_STYLE_CHOICES = ['normal', 'italic'];
+const overlayFontCatalog = window.overlayFonts;
 
-const populateFontSelect = (id, options, current) => {
+const populateFontSelect = (id, current) => {
   const select = byId(id);
+  if (!select || !overlayFontCatalog) return;
   select.replaceChildren();
-  const values = new Set(options);
-  if (current) values.add(current);
-  for (const value of values) {
-    const option = new Option(value.replace(/["']/g, ''), value);
-    select.add(option);
+  const options = overlayFontCatalog.options.slice();
+  if (current && !options.some((option) => option.value === current)) {
+    options.unshift({ value: current, label: current.replace(/["']/g, ''), group: 'sans' });
   }
+  overlayFontCatalog.groups.forEach((group) => {
+    const items = options.filter((option) => option.group === group);
+    if (!items.length) return;
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = t(`theme.fontGroup.${group}`);
+    items.forEach((item) => {
+      const option = new Option(item.label, item.value);
+      option.style.fontFamily = item.value;
+      optgroup.append(option);
+    });
+    select.append(optgroup);
+  });
   if (current) select.value = current;
+  select.style.fontFamily = current || '';
+};
+
+const readFontStyleValue = (select) => {
+  const raw = select?.selectedOptions?.[0]?.getAttribute('value') || select?.value;
+  if (typeof raw !== 'string') return 'normal';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'italic' || normalized === 'oblique' || normalized === 'itálico' || normalized === 'italico' || normalized === 'cursiva') {
+    return 'italic';
+  }
+  return 'normal';
+};
+
+const populateFontStyleSelect = (id, current) => {
+  const select = byId(id);
+  if (!select) return;
+  Array.from(select.options).forEach((option) => {
+    const value = option.getAttribute('value') || option.value;
+    if (FONT_STYLE_CHOICES.includes(value)) option.textContent = t(`theme.fontStyle.${value}`);
+  });
+  select.value = current === 'italic' ? 'italic' : 'normal';
 };
 
 const numericFields = [
@@ -787,8 +797,11 @@ const applyThemeToInputs = (theme) => {
   );
   themeState.applying = true;
   try {
-    populateFontSelect('theme-fontFamily', FONT_CHOICES, theme.fontFamily);
-    populateFontSelect('theme-timeFontFamily', TIME_FONT_CHOICES, theme.timeFontFamily);
+    overlayFontCatalog?.ensure();
+    populateFontSelect('theme-fontFamily', theme.fontFamily);
+    populateFontSelect('theme-timeFontFamily', theme.timeFontFamily);
+    populateFontStyleSelect('theme-fontStyle', theme.fontStyle);
+    populateFontStyleSelect('theme-timeFontStyle', theme.timeFontStyle);
     numericFields.forEach((field) => {
       const input = byId(`theme-${field}`);
       if (input) input.value = String(theme[field]);
@@ -842,6 +855,10 @@ const collectThemeFromInputs = () => {
   if (fontFamily) partial.fontFamily = fontFamily.value;
   const timeFontFamily = byId('theme-timeFontFamily');
   if (timeFontFamily) partial.timeFontFamily = timeFontFamily.value;
+  const fontStyle = byId('theme-fontStyle');
+  if (fontStyle) partial.fontStyle = readFontStyleValue(fontStyle);
+  const timeFontStyle = byId('theme-timeFontStyle');
+  if (timeFontStyle) partial.timeFontStyle = readFontStyleValue(timeFontStyle);
   const orientation = byId('theme-layoutOrientation');
   if (orientation) partial.layoutOrientation = orientation.value;
   const language = byId('theme-language');
@@ -1071,6 +1088,18 @@ window.addEventListener('gts-language-change', () => {
     Array.from(preset.options).forEach((option) => {
       option.textContent = option.value ? i18n.presetLabel(option.value) : t('theme.custom');
     });
+  }
+  if (themeState.current) {
+    const applying = themeState.applying;
+    themeState.applying = true;
+    try {
+      populateFontSelect('theme-fontFamily', themeState.current.fontFamily);
+      populateFontSelect('theme-timeFontFamily', themeState.current.timeFontFamily);
+      populateFontStyleSelect('theme-fontStyle', themeState.current.fontStyle);
+      populateFontStyleSelect('theme-timeFontStyle', themeState.current.timeFontStyle);
+    } finally {
+      themeState.applying = applying;
+    }
   }
   const gameSelect = byId('game-select');
   if (gameSelect?.options.length) gameSelect.options[0].textContent = t('game.select');

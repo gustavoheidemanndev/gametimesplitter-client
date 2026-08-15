@@ -1,6 +1,7 @@
 export type AppLanguage = 'en' | 'pt-BR' | 'es';
 export type TimeAlignment = 'left' | 'center' | 'right';
 export type LayoutOrientation = 'vertical' | 'horizontal';
+export type FontStyle = 'normal' | 'italic';
 
 export const supportedAppLanguages: AppLanguage[] = ['en', 'pt-BR', 'es'];
 export const DEFAULT_APP_LANGUAGE: AppLanguage = 'en';
@@ -75,6 +76,8 @@ export interface OverlayTheme {
   timeFontFamily: string;
   fontWeight: number;
   timeFontWeight: number;
+  fontStyle: FontStyle;
+  timeFontStyle: FontStyle;
   baseFontSize: number;
   segmentFontSize: number;
   timeFontSize: number;
@@ -126,6 +129,8 @@ export const defaultOverlayTheme: OverlayTheme = {
   timeFontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
   fontWeight: 600,
   timeFontWeight: 800,
+  fontStyle: 'normal',
+  timeFontStyle: 'normal',
   baseFontSize: 13,
   segmentFontSize: 13,
   timeFontSize: 52,
@@ -272,12 +277,23 @@ export const sanitizeOverlayTheme = (value: unknown): OverlayTheme => {
     typeof input === 'boolean' ? input : fallback;
   const clampColor = (input: string, fallback: string): string =>
     typeof input === 'string' && /^#[0-9a-fA-F]{6}$/.test(input) ? input : fallback;
+  const clampFontStyle = (input: unknown, fallback: FontStyle): FontStyle => {
+    if (typeof input !== 'string') return fallback;
+    const normalized = input.trim().toLowerCase();
+    if (normalized === 'italic' || normalized === 'oblique' || normalized === 'itálico' || normalized === 'italico' || normalized === 'cursiva') {
+      return 'italic';
+    }
+    if (normalized === 'normal') return 'normal';
+    return fallback;
+  };
 
   return {
     fontFamily: typeof merged.fontFamily === 'string' && merged.fontFamily.trim() ? merged.fontFamily : defaultOverlayTheme.fontFamily,
     timeFontFamily: typeof merged.timeFontFamily === 'string' && merged.timeFontFamily.trim() ? merged.timeFontFamily : defaultOverlayTheme.timeFontFamily,
     fontWeight: clampNumber(merged.fontWeight, 100, 900, defaultOverlayTheme.fontWeight),
     timeFontWeight: clampNumber(merged.timeFontWeight, 100, 900, defaultOverlayTheme.timeFontWeight),
+    fontStyle: clampFontStyle(merged.fontStyle, defaultOverlayTheme.fontStyle),
+    timeFontStyle: clampFontStyle(merged.timeFontStyle, defaultOverlayTheme.timeFontStyle),
     baseFontSize: clampNumber(merged.baseFontSize, 8, 40, defaultOverlayTheme.baseFontSize),
     segmentFontSize: clampNumber(merged.segmentFontSize, 8, 40, defaultOverlayTheme.segmentFontSize),
     timeFontSize: clampNumber(merged.timeFontSize, 16, 160, defaultOverlayTheme.timeFontSize),

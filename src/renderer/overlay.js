@@ -432,8 +432,10 @@ const applyTheme = (theme) => {
   showSegmentTimer = Boolean(theme.showSegmentTimer);
   const style = document.documentElement.style;
   const set = (name, value) => style.setProperty(name, value);
+  window.overlayFonts?.ensure([theme.fontFamily, theme.timeFontFamily]);
   set('--font-family', theme.fontFamily); set('--time-font-family', theme.timeFontFamily);
   set('--font-weight', theme.fontWeight); set('--time-font-weight', theme.timeFontWeight);
+  set('--font-style', theme.fontStyle || 'normal'); set('--time-font-style', theme.timeFontStyle || 'normal');
   set('--base-font-size', `${theme.baseFontSize}px`); set('--segment-font-size', `${theme.segmentFontSize}px`);
   set('--time-font-size', `${theme.timeFontSize}px`); set('--game-font-size', `${theme.gameFontSize}px`);
   set('--category-font-size', `${theme.categoryFontSize}px`); set('--footer-font-size', `${theme.footerFontSize}px`);

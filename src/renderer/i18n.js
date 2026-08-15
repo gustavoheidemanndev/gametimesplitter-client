@@ -66,7 +66,10 @@
     'theme.help': 'The order in this list is the order shown in the window. Freely duplicate, rename, move, or remove each component.',
     'theme.appearance': 'General and component appearance', 'theme.language': 'Language', 'language.en': 'English',
     'language.pt-BR': 'Português (Brasil)', 'language.es': 'Español', 'theme.preset': 'Preset', 'theme.custom': 'Custom',
-    'theme.generalFont': 'General font', 'theme.timeFont': 'Time font', 'theme.generalWeight': 'General weight',
+    'theme.generalFont': 'General font', 'theme.timeFont': 'Time font', 'theme.generalStyle': 'General style',
+    'theme.timeStyle': 'Time style', 'theme.fontStyle.normal': 'Normal', 'theme.fontStyle.italic': 'Italic',
+    'theme.fontGroup.sans': 'Sans', 'theme.fontGroup.serif': 'Serif', 'theme.fontGroup.mono': 'Monospace',
+    'theme.fontGroup.display': 'Display', 'theme.generalWeight': 'General weight',
     'theme.timeWeight': 'Time weight', 'theme.baseFont': 'Base font', 'theme.segmentsFont': 'Segments',
     'theme.largeTime': 'Large time', 'theme.gameTitle': 'Game title', 'theme.category': 'Category', 'theme.footer': 'Footer',
     'theme.padding': 'Inner spacing', 'theme.segmentHeight': 'Segment (height)', 'theme.segmentGap': 'Between segments',
@@ -205,7 +208,9 @@
     'theme.newComponent': 'Novo componente', 'theme.add': 'Adicionar', 'theme.help': 'A ordem desta lista é a ordem exibida na janela. Duplique, renomeie, mova ou remova cada componente livremente.',
     'theme.appearance': 'Aparência geral e dos componentes', 'theme.language': 'Idioma', 'language.en': 'English', 'language.pt-BR': 'Português (Brasil)',
     'language.es': 'Español', 'theme.preset': 'Preset', 'theme.custom': 'Personalizado', 'theme.generalFont': 'Fonte geral', 'theme.timeFont': 'Fonte do tempo',
-    'theme.generalWeight': 'Peso geral', 'theme.timeWeight': 'Peso do tempo', 'theme.baseFont': 'Fonte base', 'theme.segmentsFont': 'Segmentos',
+    'theme.generalStyle': 'Estilo geral', 'theme.timeStyle': 'Estilo do tempo', 'theme.fontStyle.normal': 'Normal', 'theme.fontStyle.italic': 'Itálico',
+    'theme.fontGroup.sans': 'Sem serifa', 'theme.fontGroup.serif': 'Com serifa', 'theme.fontGroup.mono': 'Monoespaçada',
+    'theme.fontGroup.display': 'Display', 'theme.generalWeight': 'Peso geral', 'theme.timeWeight': 'Peso do tempo', 'theme.baseFont': 'Fonte base', 'theme.segmentsFont': 'Segmentos',
     'theme.largeTime': 'Tempo grande', 'theme.gameTitle': 'Título do jogo', 'theme.category': 'Categoria', 'theme.footer': 'Rodapé',
     'theme.padding': 'Espaçamento interno', 'theme.segmentHeight': 'Segmento (altura)', 'theme.segmentGap': 'Entre segmentos',
     'theme.sectionGap': 'Entre seções', 'theme.corners': 'Cantos', 'theme.timeSpacing': 'Espaçamento do tempo',
@@ -338,7 +343,9 @@
     'theme.newComponent': 'Nuevo componente', 'theme.add': 'Añadir', 'theme.help': 'El orden de esta lista es el que se muestra en la ventana. Duplica, renombra, mueve o elimina cada componente libremente.',
     'theme.appearance': 'Apariencia general y de los componentes', 'theme.language': 'Idioma', 'language.en': 'English', 'language.pt-BR': 'Português (Brasil)',
     'language.es': 'Español', 'theme.preset': 'Preajuste', 'theme.custom': 'Personalizado', 'theme.generalFont': 'Fuente general', 'theme.timeFont': 'Fuente del tiempo',
-    'theme.generalWeight': 'Peso general', 'theme.timeWeight': 'Peso del tiempo', 'theme.baseFont': 'Fuente base', 'theme.segmentsFont': 'Segmentos',
+    'theme.generalStyle': 'Estilo general', 'theme.timeStyle': 'Estilo del tiempo', 'theme.fontStyle.normal': 'Normal', 'theme.fontStyle.italic': 'Cursiva',
+    'theme.fontGroup.sans': 'Sans', 'theme.fontGroup.serif': 'Serif', 'theme.fontGroup.mono': 'Monoespaciada',
+    'theme.fontGroup.display': 'Display', 'theme.generalWeight': 'Peso general', 'theme.timeWeight': 'Peso del tiempo', 'theme.baseFont': 'Fuente base', 'theme.segmentsFont': 'Segmentos',
     'theme.largeTime': 'Tiempo grande', 'theme.gameTitle': 'Título del juego', 'theme.category': 'Categoría', 'theme.footer': 'Pie',
     'theme.padding': 'Espaciado interior', 'theme.segmentHeight': 'Segmento (altura)', 'theme.segmentGap': 'Entre segmentos',
     'theme.sectionGap': 'Entre secciones', 'theme.corners': 'Esquinas', 'theme.timeSpacing': 'Espaciado del tiempo',
@@ -484,7 +491,9 @@
   const applyToDocument = (root = document) => {
     const scope = root?.querySelectorAll ? root : document;
     scope.querySelectorAll('[data-i18n]').forEach((element) => {
+      const optionValue = element.tagName === 'OPTION' ? element.getAttribute('value') : null;
       element.textContent = t(element.dataset.i18n);
+      if (optionValue !== null) element.setAttribute('value', optionValue);
     });
     scope.querySelectorAll('*').forEach((element) => {
       for (const attribute of element.attributes) {
