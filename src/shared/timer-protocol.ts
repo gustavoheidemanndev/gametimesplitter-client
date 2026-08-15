@@ -6,6 +6,8 @@ export interface TimerSegmentState {
   personalBestTimeMs: number | null;
   personalBestSegmentTimeMs: number | null;
   bestSegmentTimeMs: number | null;
+  /** Cumulative Best Split Times comparison: best pace ever at this split, not necessarily PB. */
+  bestSplitTimeMs: number | null;
 }
 
 export interface AutosplitConfig {
@@ -63,6 +65,7 @@ export interface AutosplitState extends AutosplitConfig {
   chapterKills: number | null;
   igtMs: number | null;
   pauseBuffers: number | null;
+  doorLoadsTimeMs: number | null;
 }
 
 export const DEFAULT_AUTOSPLIT_CONFIG: AutosplitConfig = {

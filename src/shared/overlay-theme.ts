@@ -19,6 +19,9 @@ export type OverlayComponentType =
   | 'chapterKills'
   | 'igt'
   | 'pauseBuffers'
+  | 'bestPossibleTime'
+  | 'bestSplitTimes'
+  | 'doorLoads'
   | 'separator';
 
 export interface OverlayComponent {
@@ -30,7 +33,7 @@ export interface OverlayComponent {
 export const overlayComponentTypes: OverlayComponentType[] = [
   'title', 'splits', 'timer', 'previousSegment', 'golds', 'segmentPersonalBest',
   'sumOfBest', 'personalBest', 'attempts', 'money', 'chapterKills',
-  'igt', 'pauseBuffers', 'separator',
+  'igt', 'pauseBuffers', 'bestPossibleTime', 'bestSplitTimes', 'doorLoads', 'separator',
 ];
 
 export const overlayComponentLabelCatalogs: Record<AppLanguage, Record<OverlayComponentType, string>> = {
@@ -38,19 +41,25 @@ export const overlayComponentLabelCatalogs: Record<AppLanguage, Record<OverlayCo
     title: 'Title', splits: 'Splits', timer: 'Timer', previousSegment: 'Previous Segment',
     golds: 'Gold', segmentPersonalBest: 'Segment Personal Best', sumOfBest: 'Sum of Best',
     personalBest: 'Personal Best', attempts: 'Attempts', money: 'Money',
-    chapterKills: 'Chapter Kills', igt: 'IGT', pauseBuffers: 'Pause Buffers', separator: 'Separator',
+    chapterKills: 'Chapter Kills', igt: 'IGT', pauseBuffers: 'Pause Buffers',
+    bestPossibleTime: 'Best Possible Time', bestSplitTimes: 'Best Time Splits',
+    doorLoads: 'Door Time Splits', separator: 'Separator',
   },
   'pt-BR': {
     title: 'Título', splits: 'Splits', timer: 'Tempo', previousSegment: 'Segmento anterior',
     golds: 'Gold', segmentPersonalBest: 'Personal Best do segmento', sumOfBest: 'Soma dos melhores',
     personalBest: 'Personal Best', attempts: 'Tentativas', money: 'Dinheiro',
-    chapterKills: 'Kills do capítulo', igt: 'IGT', pauseBuffers: 'Pause buffers', separator: 'Separador',
+    chapterKills: 'Kills do capítulo', igt: 'IGT', pauseBuffers: 'Pause buffers',
+    bestPossibleTime: 'Melhor tempo possível', bestSplitTimes: 'Melhor pace',
+    doorLoads: 'Tempo de portas', separator: 'Separador',
   },
   es: {
     title: 'Título', splits: 'Splits', timer: 'Tiempo', previousSegment: 'Segmento anterior',
     golds: 'Gold', segmentPersonalBest: 'Mejor marca personal del segmento', sumOfBest: 'Suma de los mejores',
     personalBest: 'Mejor marca personal', attempts: 'Intentos', money: 'Dinero',
-    chapterKills: 'Bajas del capítulo', igt: 'IGT', pauseBuffers: 'Buffers de pausa', separator: 'Separador',
+    chapterKills: 'Bajas del capítulo', igt: 'IGT', pauseBuffers: 'Buffers de pausa',
+    bestPossibleTime: 'Mejor tiempo posible', bestSplitTimes: 'Mejor pace',
+    doorLoads: 'Tiempo de puertas', separator: 'Separador',
   },
 };
 
@@ -61,7 +70,11 @@ export const overlayComponentLabels: Record<OverlayComponentType, string> =
 export const getOverlayComponentLabel = (
   type: OverlayComponentType,
   language: AppLanguage
-): string => overlayComponentLabelCatalogs[language][type];
+): string => {
+  const labels = overlayComponentLabelCatalogs[language] as Record<string, string | undefined>;
+  const fallback = overlayComponentLabelCatalogs[DEFAULT_APP_LANGUAGE] as Record<string, string | undefined>;
+  return labels[type] ?? fallback[type] ?? type;
+};
 
 export const defaultOverlayComponents: OverlayComponent[] = [
   { id: 'title', type: 'title', label: 'Title' },
@@ -181,10 +194,6 @@ export const overlayThemePresets: Record<string, OverlayTheme> = {
     borderWidth: 0,
     padding: 4,
     sectionGap: 4,
-    components: [
-      { id: 'title', type: 'title', label: 'Title' },
-      { id: 'timer', type: 'timer', label: 'Timer' },
-    ],
     showPhase: false,
     showCategory: false,
     timeFontSize: 60,
@@ -230,6 +239,15 @@ export const overlayThemePresets: Record<string, OverlayTheme> = {
 const isAppLanguage = (value: unknown): value is AppLanguage =>
   typeof value === 'string' && supportedAppLanguages.includes(value as AppLanguage);
 
+const TRANSIENT_OVERLAY_COMPONENT_TYPES = new Set(['raceDelta']);
+const overlayComponentTypePattern = /^[a-z][a-zA-Z0-9]{0,47}$/;
+
+// Persist camelCase types even if this process's catalog is older than the client.
+const isPersistableOverlayComponentType = (value: unknown): value is OverlayComponentType =>
+  typeof value === 'string'
+  && overlayComponentTypePattern.test(value)
+  && !TRANSIENT_OVERLAY_COMPONENT_TYPES.has(value);
+
 const isKnownDefaultLabel = (type: OverlayComponentType, label: string): boolean =>
   supportedAppLanguages.some((language) => getOverlayComponentLabel(type, language) === label) ||
   (type === 'golds' && label === 'Golds');
@@ -246,8 +264,8 @@ const sanitizeComponents = (value: unknown, language: AppLanguage): OverlayCompo
   value.slice(0, 32).forEach((candidate, index) => {
     if (!candidate || typeof candidate !== 'object') return;
     const source = candidate as Partial<OverlayComponent>;
-    if (!overlayComponentTypes.includes(source.type as OverlayComponentType)) return;
-    const type = source.type as OverlayComponentType;
+    if (!isPersistableOverlayComponentType(source.type)) return;
+    const type = source.type;
     const baseId = typeof source.id === 'string' && source.id.trim()
       ? source.id.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
       : `${type}-${index + 1}`;
@@ -335,6 +353,26 @@ export const sanitizeOverlayTheme = (value: unknown): OverlayTheme => {
     uppercaseCategory: clampBool(merged.uppercaseCategory, defaultOverlayTheme.uppercaseCategory),
   };
 };
+
+/** Preset muda visual; lista de componentes e flags de visibilidade do layout atual permanecem. */
+export const applyOverlayThemePreset = (preset: OverlayTheme, current: OverlayTheme): OverlayTheme =>
+  sanitizeOverlayTheme({
+    ...preset,
+    language: current.language,
+    components: current.components,
+    showGame: current.showGame,
+    showCategory: current.showCategory,
+    showSegments: current.showSegments,
+    showPhase: current.showPhase,
+    showFooter: current.showFooter,
+    showDeltas: current.showDeltas,
+    showSegmentTime: current.showSegmentTime,
+    showSegmentTimer: current.showSegmentTimer,
+    compactTime: current.compactTime,
+    uppercaseCategory: current.uppercaseCategory,
+    layoutOrientation: current.layoutOrientation,
+    timeAlignment: current.timeAlignment,
+  });
 
 export const hexToRgba = (hex: string, alpha: number): string => {
   const match = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());

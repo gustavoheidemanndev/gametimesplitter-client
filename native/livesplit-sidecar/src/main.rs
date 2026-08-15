@@ -5,6 +5,7 @@ mod process_memory;
 
 use autosplit::{AutosplitConfig, AutosplitState, Autosplitter};
 use livesplit_core::{
+    comparison::best_split_times,
     run::{parser::composite, saver::livesplit},
     Run, Segment, Time, TimeSpan, Timer, TimerPhase,
 };
@@ -101,6 +102,8 @@ struct SegmentState {
     personal_best_time_ms: Option<f64>,
     personal_best_segment_time_ms: Option<f64>,
     best_segment_time_ms: Option<f64>,
+    /// Cumulative Best Split Times comparison: best pace ever at this split, not necessarily PB.
+    best_split_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -508,6 +511,7 @@ impl Engine {
                         let split = segment.split_time();
                         let personal_best = segment.personal_best_split_time();
                         let best_segment = segment.best_segment_time();
+                        let best_split = segment.comparison(best_split_times::NAME);
                         let displayed_personal_best =
                             display_time(personal_best.real_time, personal_best.game_time);
                         let personal_best_segment =
@@ -528,6 +532,10 @@ impl Engine {
                             best_segment_time_ms: to_ms(display_time(
                                 best_segment.real_time,
                                 best_segment.game_time,
+                            )),
+                            best_split_time_ms: to_ms(display_time(
+                                best_split.real_time,
+                                best_split.game_time,
                             )),
                         }
                     })

@@ -54,6 +54,7 @@ export const unavailableTimerState = (): TimerState => ({
     chapterKills: null,
     igtMs: null,
     pauseBuffers: null,
+    doorLoadsTimeMs: null,
   },
 });
 

@@ -183,6 +183,49 @@ const liveTotalDeltaMs = (state, index) => {
   return (state.currentTimeMs || 0) - personalBest;
 };
 
+/**
+ * Best Possible Time do LiveSplit: tempo de chegada se todos os splits restantes forem gold.
+ *
+ * No segmento atual usa `max(tempo ao vivo, gold)`. Sem gold em algum restante, não há BPT.
+ * Parado equivale à Soma dos melhores; encerrado, ao tempo da tentativa.
+ */
+const bestPossibleTimeMs = (state) => {
+  const segments = state?.available ? state.segments : [];
+  if (!segments.length) return null;
+  const golds = segments.map((segment) => segment.bestSegmentTimeMs);
+  if (golds.some((gold) => gold === null || gold === undefined)) return null;
+
+  const sumOfBest = golds.reduce((total, gold) => total + gold, 0);
+  if (!state.available || state.phase === 'notRunning') return sumOfBest;
+  if (state.phase === 'ended') return state.currentTimeMs ?? null;
+
+  const index = runningSegmentIndex(state);
+  if (index === null) return sumOfBest;
+  const live = liveSegmentTimeMs(state);
+  const remainingAfter = golds.slice(index + 1).reduce((total, gold) => total + gold, 0);
+  return segmentStartMs(segments, index) + Math.max(live ?? 0, golds[index]) + remainingAfter;
+};
+
+/**
+ * Delta da run atual contra Best Split Times: o melhor pace cumulativo já feito, não o PB.
+ *
+ * Negativo = adiantado em relação a esse pace.
+ */
+const bestSplitTimesDeltaMs = (state) => {
+  const segments = state?.available ? state.segments : [];
+  if (!segments.length || !state.available || state.phase === 'notRunning') return null;
+
+  const index = state.phase === 'ended' ? segments.length - 1 : runningSegmentIndex(state);
+  if (index === null) return null;
+  const best = segments[index]?.bestSplitTimeMs;
+  if (best === null || best === undefined) return null;
+  if (state.phase === 'ended') {
+    const split = segments[index]?.splitTimeMs;
+    return split === null || split === undefined ? null : split - best;
+  }
+  return (state.currentTimeMs || 0) - best;
+};
+
 const renderTitle = (state) => {
   const section = create('section', 'layout-component component-title');
   section.append(
@@ -339,6 +382,21 @@ const renderComponent = (component, state) => {
     case 'pauseBuffers': {
       const buffers = state?.autosplit?.pauseBuffers;
       return renderStat(component.type, label, buffers == null ? '—' : i18n.formatNumber(buffers));
+    }
+    case 'bestPossibleTime':
+      return renderStat(component.type, label, formatTime(bestPossibleTimeMs(state)));
+    case 'bestSplitTimes': {
+      const delta = bestSplitTimesDeltaMs(state);
+      return renderStat(
+        component.type,
+        label,
+        formatDelta(delta),
+        delta == null ? '' : deltaClass(delta)
+      );
+    }
+    case 'doorLoads': {
+      const doorLoads = state?.autosplit?.doorLoadsTimeMs;
+      return renderStat(component.type, label, formatTime(doorLoads));
     }
     case 'separator': return create('div', 'layout-component component-separator');
     // Só existe se uma versão futura promover o campo a tipo persistido no tema; hoje ele é

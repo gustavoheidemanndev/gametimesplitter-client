@@ -1,6 +1,7 @@
 import { sanitizeOverlayTheme, type OverlayTheme } from '../../shared/overlay-theme';
 import { ApiClient, ApiError } from './api-client';
 import { OverlayThemeStore } from './overlay-theme-store';
+import type { ActiveOverlayLayout } from '../../shared/types';
 
 const LAYOUT_POLL_INTERVAL_MS = 5_000;
 
@@ -9,26 +10,22 @@ interface OverlayThemeSyncCallbacks {
   onStatus: (message: string, isError: boolean) => void;
 }
 
-const valuesDiffer = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left) !== JSON.stringify(right);
-
-const mergeLocalChanges = (
-  baseline: OverlayTheme | undefined,
-  local: OverlayTheme,
-  remote: OverlayTheme
-): OverlayTheme => {
-  if (!baseline) return sanitizeOverlayTheme(local);
-  const merged = { ...sanitizeOverlayTheme(remote) } as Record<string, unknown>;
-  (Object.keys(local) as Array<keyof OverlayTheme>).forEach((key) => {
-    if (valuesDiffer(baseline[key], local[key])) merged[key] = local[key];
-  });
-  return sanitizeOverlayTheme(merged);
+const isRemoteLayoutNewer = (
+  remoteUpdatedAt: string | null | undefined,
+  localModifiedAt: string | null | undefined
+): boolean => {
+  if (!remoteUpdatedAt) return false;
+  if (!localModifiedAt) return true;
+  const remoteMs = Date.parse(remoteUpdatedAt);
+  const localMs = Date.parse(localModifiedAt);
+  if (!Number.isFinite(remoteMs)) return false;
+  if (!Number.isFinite(localMs)) return true;
+  return remoteMs > localMs;
 };
 
 export class OverlayThemeSync {
   private pollTimer?: NodeJS.Timeout;
   private lastRevision: string | null | undefined;
-  private baselineTheme?: OverlayTheme;
   private pendingTheme?: OverlayTheme;
   private inFlight?: Promise<void>;
   private lastError?: string;
@@ -57,15 +54,11 @@ export class OverlayThemeSync {
   handleSessionChange(authenticated: boolean): void {
     this.sessionGeneration += 1;
     this.lastRevision = undefined;
-    this.baselineTheme = undefined;
     this.pendingTheme = undefined;
     this.localDraftIds.clear();
     if (authenticated) {
       const syncState = this.themeStore.getSyncState();
       this.lastRevision = syncState.revision;
-      this.baselineTheme = syncState.baselineTheme
-        ? sanitizeOverlayTheme(syncState.baselineTheme)
-        : syncState.dirty ? undefined : sanitizeOverlayTheme(this.themeStore.get());
       this.pendingTheme = syncState.dirty ? sanitizeOverlayTheme(this.themeStore.get()) : undefined;
       void this.syncNow();
     }
@@ -103,6 +96,37 @@ export class OverlayThemeSync {
     return this.sessionGeneration === generation && this.api.getSession()?.user.id === userId;
   }
 
+  private localWinsAgainst(remoteUpdatedAt: string | null | undefined): boolean {
+    return !isRemoteLayoutNewer(remoteUpdatedAt, this.themeStore.getSyncState().localModifiedAt);
+  }
+
+  private remoteDroppedLocalComponentTypes(remoteTheme: OverlayTheme): boolean {
+    const remoteTypes = new Set(sanitizeOverlayTheme(remoteTheme).components.map((component) => component.type));
+    return this.themeStore.get().components.some((component) => !remoteTypes.has(component.type));
+  }
+
+  private async applyRemoteLayout(
+    layout: ActiveOverlayLayout,
+    expectedLocalVersion: number,
+    generation: number,
+    userId: string
+  ): Promise<boolean> {
+    if (!layout.revision) return false;
+    const result = await this.themeStore.applyRemote(
+      layout.theme,
+      layout.revision,
+      expectedLocalVersion,
+      layout.updatedAt
+    );
+    if (!this.sessionIsCurrent(generation, userId)) return false;
+    if (!result.applied) return false;
+    this.lastRevision = layout.revision;
+    this.pendingTheme = undefined;
+    this.callbacks.onRemoteTheme(result.theme);
+    this.reportSuccess('Layout atualizado a partir da web.');
+    return true;
+  }
+
   private async synchronize(): Promise<void> {
     const session = this.api.getSession();
     if (!session || this.localDraftIds.size > 0) return;
@@ -119,21 +143,23 @@ export class OverlayThemeSync {
             if (!this.sessionIsCurrent(generation, userId)) return;
             if (!remote.revision) throw new Error('A API não retornou a revisão do layout salvo.');
             this.lastRevision = remote.revision;
-            this.baselineTheme = sanitizeOverlayTheme(remote.theme);
             if (this.localDraftIds.size > 0) return;
             if (
               this.pendingTheme === pending &&
               this.themeStore.getLocalVersion() === pendingLocalVersion
             ) {
+              // Keep what this client sent. An older API sanitizer may drop
+              // newer component types from remote.theme; applying that would
+              // wipe a successful local edit (Best Split Times, etc.).
               const result = await this.themeStore.markSynced(
-                remote.theme,
+                pending,
                 remote.revision,
-                pendingLocalVersion
+                pendingLocalVersion,
+                remote.updatedAt
               );
               if (!this.sessionIsCurrent(generation, userId)) return;
               if (!result.applied) return;
               this.pendingTheme = undefined;
-              this.callbacks.onRemoteTheme(result.theme);
             }
             this.reportSuccess('Layout enviado e sincronizado com a web.');
             if (this.pendingTheme) continue;
@@ -146,26 +172,19 @@ export class OverlayThemeSync {
               this.themeStore.getLocalVersion() !== pendingLocalVersion &&
               this.pendingTheme === pending
             ) return;
-            const local = this.pendingTheme ?? pending;
-            const merged = mergeLocalChanges(
-              this.baselineTheme,
-              local,
-              sanitizeOverlayTheme(latest.theme)
-            );
+            if (!this.localWinsAgainst(latest.updatedAt)) {
+              await this.applyRemoteLayout(latest, pendingLocalVersion, generation, userId);
+              return;
+            }
             this.lastRevision = latest.revision;
-            this.baselineTheme = sanitizeOverlayTheme(latest.theme);
-            this.pendingTheme = merged;
-            const persisted = await this.themeStore.rebaseLocal(
-              merged,
+            this.pendingTheme = this.pendingTheme ?? pending;
+            await this.themeStore.rebaseLocal(
+              this.pendingTheme,
               sanitizeOverlayTheme(latest.theme),
-              latest.revision
+              latest.revision,
+              latest.updatedAt
             );
             if (!this.sessionIsCurrent(generation, userId)) return;
-            this.callbacks.onRemoteTheme(persisted);
-            this.callbacks.onStatus(
-              'O layout também mudou na web; as alterações foram mescladas e reenviadas.',
-              false
-            );
             continue;
           }
         }
@@ -178,23 +197,32 @@ export class OverlayThemeSync {
 
         if (remote.revision === null) {
           this.lastRevision = null;
-          this.baselineTheme = sanitizeOverlayTheme(this.themeStore.get());
           this.pendingTheme = sanitizeOverlayTheme(this.themeStore.get());
           continue;
         }
 
         if (remote.revision !== this.lastRevision) {
-          const result = await this.themeStore.applyRemote(
-            remote.theme,
-            remote.revision,
-            readLocalVersion
-          );
-          if (!this.sessionIsCurrent(generation, userId)) return;
-          if (!result.applied) return;
-          this.lastRevision = remote.revision;
-          this.baselineTheme = result.theme;
-          this.callbacks.onRemoteTheme(result.theme);
-          this.reportSuccess('Layout atualizado a partir da web.');
+          const syncState = this.themeStore.getSyncState();
+          if (syncState.dirty && this.localWinsAgainst(remote.updatedAt)) {
+            this.lastRevision = remote.revision;
+            this.pendingTheme = sanitizeOverlayTheme(this.themeStore.get());
+            await this.themeStore.rebaseLocal(
+              this.pendingTheme,
+              sanitizeOverlayTheme(remote.theme),
+              remote.revision,
+              remote.updatedAt
+            );
+            if (!this.sessionIsCurrent(generation, userId)) return;
+            continue;
+          }
+          if (
+            this.localWinsAgainst(remote.updatedAt) &&
+            this.remoteDroppedLocalComponentTypes(remote.theme)
+          ) {
+            this.lastRevision = remote.revision;
+            return;
+          }
+          await this.applyRemoteLayout(remote, readLocalVersion, generation, userId);
         }
         return;
       }
@@ -203,7 +231,6 @@ export class OverlayThemeSync {
       const message = error instanceof Error ? error.message : 'Falha desconhecida ao sincronizar o layout.';
       if (message !== this.lastError) {
         this.lastError = message;
-        // Sem resposta da API o layout local continua valendo; a próxima tentativa reconcilia.
         const unreachable = error instanceof ApiError && error.status === 0;
         this.callbacks.onStatus(
           unreachable

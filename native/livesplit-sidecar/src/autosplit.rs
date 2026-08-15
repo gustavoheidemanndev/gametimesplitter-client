@@ -257,6 +257,8 @@ pub struct AutosplitState {
     /// The game's persisted playTime value converted from whole seconds.
     pub igt_ms: Option<u64>,
     pub pause_buffers: Option<u32>,
+    /// RTA spent in door loads this attempt (`ShowDoorloadsTime` of yuushi's RE4 autosplitter).
+    pub door_loads_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -302,6 +304,17 @@ fn game_time_seconds(elapsed_frames: i64, frame_rate: u8) -> f64 {
     }
 }
 
+/// Load de porta/stage: fora de gameplay, fora da pausa, e não na sala sentinela.
+///
+/// Mesmo termo `isDoorLoads` do autosplitter oficial da comunidade
+/// (<https://github.com/yuushiGit/RE4OG_AutoSplitter>):
+/// `screenState != 3 && screenState != 6 && room != 288`.
+fn is_door_loads(snapshot: Re4Snapshot) -> bool {
+    snapshot.screen_state != RE4_GAMEPLAY_SCREEN_STATE
+        && snapshot.screen_state != RE4_OPTIONS_SCREEN_STATE
+        && snapshot.room != RE4_SYSTEM_ROOM
+}
+
 /// Se o tick não deve contar tempo de jogo.
 ///
 /// Porte direto das três exclusões do autosplitter oficial da comunidade
@@ -319,12 +332,7 @@ fn game_time_seconds(elapsed_frames: i64, frame_rate: u8) -> f64 {
 /// **não** conta, pelo termo das opções. A sala sentinela também conta, e é isso que faz o tempo não
 /// congelar entre capítulos.
 fn frames_are_paused(snapshot: Re4Snapshot) -> bool {
-    let door_loads = snapshot.screen_state != RE4_GAMEPLAY_SCREEN_STATE
-        && snapshot.screen_state != RE4_OPTIONS_SCREEN_STATE
-        && snapshot.room != RE4_SYSTEM_ROOM;
-    let options = is_options_menu(snapshot);
-
-    door_loads || options || is_tutorial(snapshot)
+    is_door_loads(snapshot) || is_options_menu(snapshot) || is_tutorial(snapshot)
 }
 
 fn is_options_menu(snapshot: Re4Snapshot) -> bool {
@@ -512,6 +520,10 @@ pub struct Autosplitter {
     unpaused_since: Option<Instant>,
     /// Estado da pausa no tick anterior, para detectar a borda de entrada.
     pause_was_open: bool,
+    /// Tempo de porta já fechado nesta tentativa (RTA, o `Stopwatch` do `ShowDoorloadsTime`).
+    door_loads_elapsed: Duration,
+    /// Instante em que o load de porta atual começou, se estiver nele.
+    door_loads_started_at: Option<Instant>,
 }
 
 impl Default for Autosplitter {
@@ -540,6 +552,8 @@ impl Default for Autosplitter {
             pause_buffer_count: 0,
             unpaused_since: None,
             pause_was_open: false,
+            door_loads_elapsed: Duration::ZERO,
+            door_loads_started_at: None,
         }
     }
 }
@@ -616,6 +630,7 @@ impl Autosplitter {
             // obrigatória do snapshot. Antes dependia de `current_screen`, que é opcional, e por
             // isso existia um campo separado dizendo se o contador valia.
             pause_buffers: self.process.is_some().then_some(self.pause_buffer_count),
+            door_loads_time_ms: self.process.is_some().then_some(self.door_loads_time_ms()),
         }
     }
 
@@ -683,6 +698,7 @@ impl Autosplitter {
         }
 
         self.update_pause_buffers(snapshot, timer.current_phase());
+        self.update_door_loads(snapshot, timer.current_phase());
 
         let phase = timer.current_phase();
         let mut timer_changed = false;
@@ -1021,12 +1037,14 @@ impl Autosplitter {
     fn reset_pause_buffers(&mut self, snapshot: Re4Snapshot) {
         self.pause_buffer_count = 0;
         self.sync_pause_detector(snapshot);
+        self.reset_door_loads(snapshot);
     }
 
     fn clear_pause_buffers(&mut self) {
         self.pause_buffer_count = 0;
         self.unpaused_since = None;
         self.pause_was_open = false;
+        self.clear_door_loads();
     }
 
     /// Alinha o detector ao estado atual do jogo, sem contar nada.
@@ -1037,6 +1055,50 @@ impl Autosplitter {
     fn sync_pause_detector(&mut self, snapshot: Re4Snapshot) {
         self.pause_was_open = is_pause_menu_open(snapshot);
         self.unpaused_since = Some(Instant::now());
+    }
+
+    /// Cronômetro de load de porta, o `vars.doorLoadsTime` / `ShowDoorloadsTime` do oficial.
+    ///
+    /// É RTA de parede, não frames de jogo: o LRT já exclui as portas, e este campo mostra quanto
+    /// tempo de relógio foi gasto nelas nesta tentativa. Pausa e sala sentinela não entram, pelo
+    /// mesmo `isDoorLoads` do ASL.
+    fn update_door_loads(&mut self, snapshot: Re4Snapshot, phase: TimerPhase) {
+        let now = Instant::now();
+        if phase == TimerPhase::Ended || phase == TimerPhase::NotRunning {
+            self.stop_door_loads(now);
+            return;
+        }
+        if is_door_loads(snapshot) {
+            if self.door_loads_started_at.is_none() {
+                self.door_loads_started_at = Some(now);
+            }
+        } else {
+            self.stop_door_loads(now);
+        }
+    }
+
+    fn reset_door_loads(&mut self, snapshot: Re4Snapshot) {
+        self.door_loads_elapsed = Duration::ZERO;
+        self.door_loads_started_at = is_door_loads(snapshot).then(Instant::now);
+    }
+
+    fn clear_door_loads(&mut self) {
+        self.door_loads_elapsed = Duration::ZERO;
+        self.door_loads_started_at = None;
+    }
+
+    fn stop_door_loads(&mut self, now: Instant) {
+        if let Some(started) = self.door_loads_started_at.take() {
+            self.door_loads_elapsed += now.saturating_duration_since(started);
+        }
+    }
+
+    fn door_loads_time_ms(&self) -> f64 {
+        let mut elapsed = self.door_loads_elapsed;
+        if let Some(started) = self.door_loads_started_at {
+            elapsed += Instant::now().saturating_duration_since(started);
+        }
+        elapsed.as_secs_f64() * 1_000.0
     }
 
     fn detach(&mut self, message: &str, status: &'static str) {
@@ -1055,6 +1117,7 @@ impl Autosplitter {
         self.igt_zero_since = None;
         self.unpaused_since = None;
         self.pause_was_open = false;
+        self.door_loads_started_at = None;
         self.status = status;
         self.message = message.to_owned();
     }
@@ -1485,6 +1548,55 @@ mod tests {
         splitter.update_pause_buffers(pausado, TimerPhase::Ended);
 
         assert_eq!(splitter.pause_buffer_count, 0);
+    }
+
+    /// O overlay de Door Loads só conta RTA em load de porta, não na pausa nem na sala sentinela.
+    ///
+    /// É o `isDoorLoads` / `ShowDoorloadsTime` do autosplitter oficial: `screenState != 3 &&
+    /// screenState != 6 && room != 288`.
+    #[test]
+    fn tempo_de_porta_acumula_so_em_door_load() {
+        let mut splitter = Autosplitter::default();
+        let jogando = snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0);
+        let porta = snapshot_on_screen(310, SCREEN_STATE_CARREGANDO, 0);
+        let pausa = snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0);
+        let sentinela = snapshot_on_screen(RE4_SYSTEM_ROOM, SCREEN_STATE_CARREGANDO, 0);
+
+        splitter.update_door_loads(jogando, TimerPhase::Running);
+        assert_eq!(splitter.door_loads_time_ms(), 0.0);
+
+        splitter.update_door_loads(porta, TimerPhase::Running);
+        std::thread::sleep(Duration::from_millis(30));
+        splitter.update_door_loads(jogando, TimerPhase::Running);
+        assert!(splitter.door_loads_elapsed >= Duration::from_millis(20));
+
+        let fechado = splitter.door_loads_elapsed;
+        splitter.update_door_loads(pausa, TimerPhase::Running);
+        std::thread::sleep(Duration::from_millis(20));
+        splitter.update_door_loads(jogando, TimerPhase::Running);
+        assert_eq!(splitter.door_loads_elapsed, fechado);
+
+        splitter.update_door_loads(sentinela, TimerPhase::Running);
+        std::thread::sleep(Duration::from_millis(20));
+        splitter.update_door_loads(jogando, TimerPhase::Running);
+        assert_eq!(splitter.door_loads_elapsed, fechado);
+    }
+
+    /// Run encerrada congela o cronômetro de porta, mesmo que o jogo continue em load.
+    #[test]
+    fn tempo_de_porta_congela_ao_terminar() {
+        let mut splitter = Autosplitter::default();
+        let porta = snapshot_on_screen(310, SCREEN_STATE_CARREGANDO, 0);
+
+        splitter.update_door_loads(porta, TimerPhase::Running);
+        std::thread::sleep(Duration::from_millis(20));
+        splitter.update_door_loads(porta, TimerPhase::Ended);
+        let fechado = splitter.door_loads_elapsed;
+        assert!(fechado >= Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(20));
+        splitter.update_door_loads(porta, TimerPhase::Ended);
+        assert_eq!(splitter.door_loads_elapsed, fechado);
+        assert!(splitter.door_loads_started_at.is_none());
     }
 
     /// Pausa e tela de opções param o tempo, pelo termo `screenState == 6`.

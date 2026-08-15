@@ -11,6 +11,8 @@ interface ThemeSyncState {
   revision: string | null;
   dirty: boolean;
   baselineTheme?: OverlayTheme;
+  localModifiedAt?: string | null;
+  remoteUpdatedAt?: string | null;
 }
 
 interface StoredThemeEnvelope {
@@ -18,6 +20,8 @@ interface StoredThemeEnvelope {
   revision: string | null;
   dirty: boolean;
   baselineTheme: OverlayTheme | null;
+  localModifiedAt: string | null;
+  remoteUpdatedAt: string | null;
 }
 
 interface RemoteThemeResult {
@@ -55,6 +59,8 @@ export class OverlayThemeStore {
   private syncRevision: string | null = null;
   private dirty = false;
   private baselineTheme?: OverlayTheme;
+  private localModifiedAt: string | null = null;
+  private remoteUpdatedAt: string | null = null;
   private localVersion = 0;
   private mutationChain: Promise<void> = Promise.resolve();
 
@@ -108,6 +114,8 @@ export class OverlayThemeStore {
       revision: this.syncRevision,
       dirty: this.dirty,
       baselineTheme: this.baselineTheme,
+      localModifiedAt: this.localModifiedAt,
+      remoteUpdatedAt: this.remoteUpdatedAt,
     };
   }
 
@@ -152,19 +160,44 @@ export class OverlayThemeStore {
     }
   }
 
-  rebaseLocal(next: OverlayTheme, baseline: OverlayTheme, revision: string | null): Promise<OverlayTheme> {
+  rebaseLocal(
+    next: OverlayTheme,
+    baseline: OverlayTheme,
+    revision: string | null,
+    remoteUpdatedAt: string | null = null
+  ): Promise<OverlayTheme> {
     return this.enqueue(
       () => next,
-      { revision, dirty: true, baselineTheme: sanitizeOverlayTheme(baseline) }
+      {
+        revision,
+        dirty: true,
+        baselineTheme: sanitizeOverlayTheme(baseline),
+        localModifiedAt: this.localModifiedAt ?? new Date().toISOString(),
+        remoteUpdatedAt: remoteUpdatedAt ?? this.remoteUpdatedAt,
+      }
     );
   }
 
-  applyRemote(next: OverlayTheme, revision: string, expectedLocalVersion: number): Promise<RemoteThemeResult> {
-    return this.enqueueRemote(next, revision, expectedLocalVersion);
+  applyRemote(
+    next: OverlayTheme,
+    revision: string,
+    expectedLocalVersion: number,
+    remoteUpdatedAt: string | null = null
+  ): Promise<RemoteThemeResult> {
+    return this.enqueueRemote(next, revision, expectedLocalVersion, remoteUpdatedAt);
   }
 
-  markSynced(next: OverlayTheme, revision: string, expectedLocalVersion: number): Promise<RemoteThemeResult> {
-    return this.enqueueRemote(next, revision, expectedLocalVersion);
+  markSynced(
+    next: OverlayTheme,
+    revision: string,
+    expectedLocalVersion: number,
+    remoteUpdatedAt: string | null = null
+  ): Promise<RemoteThemeResult> {
+    return this.enqueueRemote(next, revision, expectedLocalVersion, remoteUpdatedAt);
+  }
+
+  private readTimestamp(value: unknown): string | null {
+    return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
   }
 
   private hydrate(value: unknown, legacyIsDirty: boolean): void {
@@ -175,12 +208,17 @@ export class OverlayThemeStore {
       this.baselineTheme = isRecord(value.baselineTheme)
         ? sanitizeOverlayTheme(value.baselineTheme)
         : this.dirty ? undefined : this.theme;
+      this.localModifiedAt = this.readTimestamp(value.localModifiedAt);
+      this.remoteUpdatedAt = this.readTimestamp(value.remoteUpdatedAt);
+      if (this.dirty && !this.localModifiedAt) this.localModifiedAt = new Date().toISOString();
       return;
     }
     this.theme = sanitizeOverlayTheme(value);
     this.syncRevision = null;
     this.dirty = legacyIsDirty;
     this.baselineTheme = legacyIsDirty ? undefined : this.theme;
+    this.localModifiedAt = legacyIsDirty ? new Date().toISOString() : null;
+    this.remoteUpdatedAt = null;
   }
 
   private setCleanDefault(): void {
@@ -188,6 +226,8 @@ export class OverlayThemeStore {
     this.syncRevision = null;
     this.dirty = false;
     this.baselineTheme = this.theme;
+    this.localModifiedAt = null;
+    this.remoteUpdatedAt = null;
   }
 
   private getFilePath(): string {
@@ -217,10 +257,9 @@ export class OverlayThemeStore {
     } catch {
       return false;
     }
-    // O tema apenas continua exibido: sem conta não há revisão a comparar nem envio pendente.
-    this.syncRevision = null;
-    this.dirty = false;
-    this.baselineTheme = this.theme;
+    // Sem sessão, continuar gravando no arquivo da última conta evita perder edições
+    // offline no próximo login; dirty/revisão do arquivo seguem para o upload na reconexão.
+    this.ownerId = lastOwnerId;
     return true;
   }
 
@@ -262,6 +301,8 @@ export class OverlayThemeStore {
       revision: this.syncRevision,
       dirty: true,
       baselineTheme: this.baselineTheme,
+      localModifiedAt: new Date().toISOString(),
+      remoteUpdatedAt: this.remoteUpdatedAt,
     }
   ): Promise<OverlayTheme> {
     let resolveResult!: (theme: OverlayTheme) => void;
@@ -275,11 +316,24 @@ export class OverlayThemeStore {
         this.localVersion += 1;
         const next = sanitizeOverlayTheme(createNext(this.theme));
         const baselineTheme = syncState.baselineTheme ?? this.baselineTheme ?? null;
-        await this.persistSnapshot({ theme: next, ...syncState, baselineTheme });
+        const localModifiedAt = syncState.dirty
+          ? (syncState.localModifiedAt ?? new Date().toISOString())
+          : (syncState.localModifiedAt ?? null);
+        const remoteUpdatedAt = syncState.remoteUpdatedAt ?? this.remoteUpdatedAt;
+        await this.persistSnapshot({
+          theme: next,
+          revision: syncState.revision,
+          dirty: syncState.dirty,
+          baselineTheme,
+          localModifiedAt,
+          remoteUpdatedAt,
+        });
         this.theme = next;
         this.syncRevision = syncState.revision;
         this.dirty = syncState.dirty;
         this.baselineTheme = baselineTheme ?? undefined;
+        this.localModifiedAt = localModifiedAt;
+        this.remoteUpdatedAt = remoteUpdatedAt;
         resolveResult(next);
       } catch (error) {
         rejectResult(error);
@@ -291,7 +345,8 @@ export class OverlayThemeStore {
   private enqueueRemote(
     value: OverlayTheme,
     revision: string,
-    expectedLocalVersion: number
+    expectedLocalVersion: number,
+    remoteUpdatedAt: string | null = null
   ): Promise<RemoteThemeResult> {
     let resolveResult!: (result: RemoteThemeResult) => void;
     let rejectResult!: (error: unknown) => void;
@@ -306,16 +361,21 @@ export class OverlayThemeStore {
           return;
         }
         const next = sanitizeOverlayTheme(value);
+        const syncedAt = remoteUpdatedAt ?? new Date().toISOString();
         await this.persistSnapshot({
           theme: next,
           revision,
           dirty: false,
           baselineTheme: next,
+          localModifiedAt: syncedAt,
+          remoteUpdatedAt: syncedAt,
         });
         this.theme = next;
         this.syncRevision = revision;
         this.dirty = false;
         this.baselineTheme = next;
+        this.localModifiedAt = syncedAt;
+        this.remoteUpdatedAt = syncedAt;
         resolveResult({ theme: next, applied: true });
       } catch (error) {
         rejectResult(error);
