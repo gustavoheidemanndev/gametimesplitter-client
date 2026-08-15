@@ -1,4 +1,3 @@
-use crate::chapter_probe::ChapterProbe;
 use crate::process_memory::ProcessReader;
 use livesplit_core::{TimeSpan, Timer, TimerPhase};
 use serde::{Deserialize, Serialize};
@@ -22,21 +21,15 @@ const RE4_SYSTEM_ROOM: i16 = 288;
 /// Primeira sala de gameplay. Abaixo disso o campo não aponta para uma sala real.
 const RE4_FIRST_ROOM: i16 = 256;
 
-/// Tempo que o IGT precisa ficar zerado para o reset automático valer.
+/// Borda de descida do IGT, igual ao `reset` do autosplitter oficial:
+/// `return current.igt == 0 && old.igt > 0;`.
 ///
-/// O IGT é gravado em segundos inteiros, então um New Game mantém a leitura em 0 por mais de
-/// um segundo — bem acima desta janela. Já a reinicialização de stage no fim de capítulo zera
-/// o campo por poucos ticks, e é isso que a janela filtra.
-const IGT_RESET_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
-
-/// Limite de linhas de diagnóstico acumuladas caso ninguém as consuma.
-const DIAGNOSTICS_CAPACITY: usize = 64;
-
-/// Intervalo entre amostras da varredura de capítulo.
-const PROBE_SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
-
-/// Intervalo do resumo periódico de estado.
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
+/// Uma janela de 750 ms foi tentada para filtrar o IGT zerado na virada de capítulo. No título
+/// (sala 288) isso atrasava o reset: a sala sentinela conta tempo, então o GTS continuava
+/// somando enquanto o LiveSplit já tinha zerado.
+fn igt_falling_edge(previous: Re4Snapshot, snapshot: Re4Snapshot) -> bool {
+    previous.igt > 0 && snapshot.igt == 0
+}
 
 /// Capítulos cujo fim **não** gera split próprio.
 ///
@@ -67,9 +60,6 @@ fn is_gameplay_room(room: i16) -> bool {
 }
 
 /// Resultado da avaliação da transição de sala no tick atual.
-///
-/// Carrega o motivo da recusa junto para o log de diagnóstico não precisar reimplementar
-/// (e divergir de) a decisão real.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DoorDecision {
     /// Par (origem, destino) pronto para virar split.
@@ -90,25 +80,6 @@ enum DoorDecision {
     Return((i16, i16)),
     /// Porta declarada na rota como limite de outro evento, então nunca fecha segmento sozinha.
     Blocked((i16, i16)),
-}
-
-impl DoorDecision {
-    /// Rótulo curto para o log de diagnóstico.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Ready(_) => "par válido",
-            Self::SystemRoom => "sala de sistema, aguardando a próxima sala real",
-            Self::NoOrigin => "sem sala de origem ainda",
-            Self::SameRoom => "mesma sala",
-            Self::IgtRewind => "IGT retrocedeu, provável load de save",
-            Self::AlreadyUsed(_) => "par já usado nesta tentativa",
-            Self::Backtrack(_) => "volta na lista de exceções, reatravessia do mesmo limite",
-            Self::Return(_) => "volta pela porta que acabou de splitar, fecha segmento",
-            // Deliberadamente genérico: a lista cobre portas coladas em fim de capítulo e também
-            // desvios de ida e volta, então afirmar "o limite é o capítulo" enganava no segundo caso.
-            Self::Blocked(_) => "porta na lista doorsWithoutSplit, não fecha segmento",
-        }
-    }
 }
 
 /// Portas que nunca fecham segmento.
@@ -191,16 +162,6 @@ fn default_doors_without_split() -> Vec<(i16, i16)> {
 /// O par é a transição de **volta**, na ordem `(sala de origem, sala de destino)`.
 fn default_return_doors_without_split() -> Vec<(i16, i16)> {
     Vec::new()
-}
-
-/// Rótulo da fase do timer para o log de diagnóstico.
-fn phase_label(phase: TimerPhase) -> &'static str {
-    match phase {
-        TimerPhase::NotRunning => "parado",
-        TimerPhase::Running => "rodando",
-        TimerPhase::Paused => "pausado",
-        TimerPhase::Ended => "encerrado",
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -332,6 +293,15 @@ const RE4_TUTORIAL_ROOMS: [i16; 2] = [257, 279];
 /// Valor de `character` correspondente ao Leon.
 const RE4_LEON: u8 = 0;
 
+/// LRT em segundos: `elapsedFrames / frameRate`, a mesma conta do `gameTime` do ASL oficial.
+fn game_time_seconds(elapsed_frames: i64, frame_rate: u8) -> f64 {
+    if frame_rate == 0 {
+        0.0
+    } else {
+        elapsed_frames as f64 / f64::from(frame_rate)
+    }
+}
+
 /// Se o tick não deve contar tempo de jogo.
 ///
 /// Porte direto das três exclusões do autosplitter oficial da comunidade
@@ -352,9 +322,13 @@ fn frames_are_paused(snapshot: Re4Snapshot) -> bool {
     let door_loads = snapshot.screen_state != RE4_GAMEPLAY_SCREEN_STATE
         && snapshot.screen_state != RE4_OPTIONS_SCREEN_STATE
         && snapshot.room != RE4_SYSTEM_ROOM;
-    let options = snapshot.screen_state == RE4_OPTIONS_SCREEN_STATE;
+    let options = is_options_menu(snapshot);
 
     door_loads || options || is_tutorial(snapshot)
+}
+
+fn is_options_menu(snapshot: Re4Snapshot) -> bool {
+    snapshot.screen_state == RE4_OPTIONS_SCREEN_STATE
 }
 
 /// Deslocamento do índice de capítulo dentro do campo `end_of_chapter`.
@@ -469,6 +443,8 @@ struct Re4Snapshot {
     room: i16,
     igt: u32,
     screen_state: u8,
+    /// Continua lido da memória; o diagnóstico que o exibia foi removido.
+    #[allow(dead_code)]
     current_screen: Option<u8>,
     money: Option<i32>,
     chapter_kills: Option<u32>,
@@ -522,14 +498,6 @@ pub struct Autosplitter {
     /// isto cada mudança fecharia um segmento.
     final_split_emitted: bool,
 
-    /// Linhas de diagnóstico das transições de sala, drenadas pelo loop do sidecar.
-    diagnostics: Vec<String>,
-    /// Varredura opcional que descobre a offset do contador de capítulo por observação.
-    probe: ChapterProbe,
-    /// Última amostragem da varredura e do resumo periódico.
-    last_probe_sample: Option<Instant>,
-    last_heartbeat: Option<Instant>,
-    probe_announced: bool,
     last_attach_attempt: Option<Instant>,
     process_id: Option<u32>,
     current_room: Option<i16>,
@@ -563,11 +531,6 @@ impl Default for Autosplitter {
             last_split_door: None,
             elapsed_frames: 0,
             final_split_emitted: false,
-            diagnostics: Vec::new(),
-            probe: ChapterProbe::from_env(),
-            last_probe_sample: None,
-            last_heartbeat: None,
-            probe_announced: false,
             last_attach_attempt: None,
             process_id: None,
             current_room: None,
@@ -616,11 +579,11 @@ impl Autosplitter {
         // manual, não.
         self.forget_route();
         self.clear_pause_buffers();
-    }
-
-    /// Consome as linhas de diagnóstico acumuladas desde a última chamada.
-    pub fn drain_diagnostics(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.diagnostics)
+        // O auto-start zera no próprio tick. Start/reset manuais passam só por aqui, e sem isto o
+        // LRT herdava os frames do título (a sala 288 conta tempo) e o delta título → agora no
+        // primeiro tick depois do start.
+        self.elapsed_frames = 0;
+        self.previous = None;
     }
 
     pub fn state(&self) -> AutosplitState {
@@ -656,7 +619,7 @@ impl Autosplitter {
         }
     }
 
-    pub fn tick(&mut self, timer: Option<&mut Timer>) -> bool {
+    pub fn tick(&mut self, mut timer: Option<&mut Timer>) -> bool {
         if !self.config.enabled {
             return false;
         }
@@ -675,40 +638,7 @@ impl Autosplitter {
             }
         };
         self.current_room = Some(snapshot.room);
-        // Toda troca da decisão de pausar o game time é registrada com as entradas que a
-        // produziram. O resumo periódico não serve aqui: um congelamento de poucos ticks na
-        // abertura do inventário passa inteiro entre duas amostras de 2 s.
-        let was_loading = self.loading;
         self.loading = frames_are_paused(snapshot);
-        if was_loading != self.loading {
-            // Qual das três exclusões do autosplitter oficial está segurando o tempo. Sem nomear o
-            // motivo, um congelamento inesperado obrigaria a deduzir a regra a partir dos campos.
-            let reason = if snapshot.screen_state == RE4_OPTIONS_SCREEN_STATE {
-                "pausa ou opções"
-            } else if is_tutorial(snapshot) {
-                "caixa de tutorial"
-            } else if snapshot.screen_state != RE4_GAMEPLAY_SCREEN_STATE {
-                "load de porta ou de stage"
-            } else {
-                "gameplay"
-            };
-            self.push_diagnostic(format!(
-                "autosplit[load]: {} | motivo {} | screenState {} | menuType {} | sala {} | \
-                 igt {}s | frames acumulados {} | frameRate {}",
-                if self.loading {
-                    "PARA de contar frames"
-                } else {
-                    "volta a contar frames"
-                },
-                reason,
-                snapshot.screen_state,
-                snapshot.menu_type,
-                snapshot.room,
-                snapshot.igt,
-                self.elapsed_frames,
-                snapshot.frame_rate,
-            ));
-        }
         self.money = snapshot.money;
         self.chapter_kills = snapshot.chapter_kills;
 
@@ -721,19 +651,16 @@ impl Autosplitter {
             snapshot.room
         );
 
-        // Diagnóstico. Roda antes de qualquer decisão e independe de haver run carregada, porque
-        // parte do que precisa ser investigado é justamente o caso em que nada acontece.
-        let phase_now = timer.as_ref().map(|timer| timer.current_phase());
-        let game_name = timer
-            .as_ref()
-            .map(|timer| timer.run().game_name().to_owned());
-        self.announce_probe();
-        self.sample_probe();
-        self.heartbeat(snapshot, phase_now, game_name.as_deref());
-
         let Some(previous) = self.previous.replace(snapshot) else {
             self.sync_pause_detector(snapshot);
             self.latch_gameplay_room(snapshot);
+            // Start manual zera `previous`. Sem o sync neste tick o overlay caía no RTA até a
+            // próxima amostra, porque `timer.start()` desinicializa o game time.
+            if let Some(timer) = timer.as_deref_mut() {
+                if is_re4_uhd_run(timer.run().game_name()) {
+                    self.sync_re4_game_time(timer, snapshot);
+                }
+            }
             return false;
         };
 
@@ -755,12 +682,10 @@ impl Autosplitter {
             return false;
         }
 
+        self.update_pause_buffers(snapshot, timer.current_phase());
+
         let phase = timer.current_phase();
         let mut timer_changed = false;
-        // O que de fato saiu, para o diagnóstico não afirmar SPLIT quando o ramo do capítulo levou
-        // a vez. O log anterior mentia nesse caso, o que esconderia exatamente este tipo de bug.
-        let mut chapter_split_emitted = false;
-        let mut door_split_emitted = false;
         let entered_world = !is_gameplay_room(previous.room) && is_gameplay_room(snapshot.room);
         let start_transition_ok = if self.config.start_only_on_new_game {
             // Jogo novo do modo principal sempre começa com o Leon na primeira sala, então exigir
@@ -778,7 +703,7 @@ impl Autosplitter {
             self.config.auto_start && phase == TimerPhase::NotRunning && start_transition_ok;
         let should_reset = self.config.auto_reset
             && matches!(phase, TimerPhase::Running | TimerPhase::Paused)
-            && self.igt_zero_confirmed();
+            && igt_falling_edge(previous, snapshot);
         // Fim de capítulo é um evento próprio do jogo e não passa pelo campo de sala: a tela de
         // resultado pode aparecer sem a sala mudar, e nesse caso a lógica de porta não tem nada
         // para observar. Por isso é uma condição separada, sem dedup por par.
@@ -823,8 +748,13 @@ impl Autosplitter {
         let should_split_final = phase == TimerPhase::Running
             && !self.final_split_emitted
             && main_game_ending_started(previous, snapshot);
-        // Lido antes das transições, porque `forget_route` limpa o latch.
-        let origin_before = self.last_gameplay_room;
+
+        // O ASL acumula em `update` mesmo parado e zera em `onStart`. Acumular parado faz o start
+        // manual herdar o título. Com o timer já rodando o efeito é o mesmo: o tick de start não
+        // soma (ainda é NotRunning) e o de reset zera depois.
+        if matches!(phase, TimerPhase::Running | TimerPhase::Paused) && !should_reset {
+            self.accumulate_re4_frames(previous, snapshot);
+        }
 
         if should_reset {
             timer.reset(true);
@@ -849,7 +779,6 @@ impl Autosplitter {
             timer_changed = true;
         } else if should_split_chapter {
             timer.split();
-            chapter_split_emitted = true;
             // A porta que caiu no mesmo tick fica pendente em vez de ser descartada: o timer só
             // fecha um segmento por chamada, e os dois eventos são limites distintos.
             self.pending_door_split = door_target;
@@ -865,199 +794,67 @@ impl Autosplitter {
             timer.split();
             self.completed_doors.insert(pair);
             self.last_split_door = Some(pair);
-            door_split_emitted = true;
             timer_changed = true;
-        }
-
-        // Por que o start automático não aconteceu. Sem isto o log fica silencioso exatamente no
-        // caso "abri um save e o timer não iniciou": só existe linha quando o start dispara.
-        // Sai apenas com o timer parado e quando a sala muda, então o volume é baixo.
-        if phase == TimerPhase::NotRunning && previous.room != snapshot.room {
-            let reason = if !self.config.auto_start {
-                "autoStart desligado".to_owned()
-            } else if !start_transition_ok {
-                if self.config.start_only_on_new_game {
-                    format!(
-                        "modo jogo novo exige {} -> {} com o Leon, e veio {} -> {} com personagem {}",
-                        RE4_SYSTEM_ROOM,
-                        RE4_FIRST_ROOM,
-                        previous.room,
-                        snapshot.room,
-                        snapshot.character
-                    )
-                } else {
-                    format!(
-                        "não é entrada no mundo: origem {} é sala real? {} | destino {} é sala real? {}",
-                        previous.room,
-                        is_gameplay_room(previous.room),
-                        snapshot.room,
-                        is_gameplay_room(snapshot.room)
-                    )
-                }
-            } else {
-                "START emitido".to_owned()
-            };
-            self.push_diagnostic(format!(
-                "autosplit[start]: sala {} -> {} | soJogoNovo {} | personagem {} | igt {}s | \
-                 screenState {} | run {:?} | {}",
-                previous.room,
-                snapshot.room,
-                self.config.start_only_on_new_game,
-                snapshot.character,
-                snapshot.igt,
-                snapshot.screen_state,
-                timer.run().game_name(),
-                reason,
-            ));
-        }
-
-        // Campos de tela em resolução de tick. O resumo de 2 em 2 segundos não resolve o que
-        // acontece na abertura da tela de fim de capítulo: nele `currentScreen` 64 aparecia às
-        // vezes por 8 s seguidos, às vezes piscando, às vezes longe de qualquer capítulo. Sem ver
-        // as transições reais não há como splitar na abertura do end chapter.
-        if snapshot.screen_state != previous.screen_state
-            || snapshot.current_screen != previous.current_screen
-            || snapshot.menu_type != previous.menu_type
-        {
-            self.push_diagnostic(format!(
-                "autosplit[tela]: screenState {} -> {} | currentScreen {:?} -> {:?} | \
-                 menuType {} -> {} | sala {} | igt {}s | capítulo {} | fase {}",
-                previous.screen_state,
-                snapshot.screen_state,
-                previous.current_screen,
-                snapshot.current_screen,
-                previous.menu_type,
-                snapshot.menu_type,
-                snapshot.room,
-                snapshot.igt,
-                current_chapter,
-                phase_label(phase),
-            ));
-        }
-
-        // Registra toda mudança do campo, não só o avanço aceito. Na investigação anterior o
-        // resumo de 2 em 2 segundos escondeu que o índice pulou dois de uma vez; em resolução de
-        // tick a sequência real fica visível.
-        if snapshot.end_of_chapter != previous.end_of_chapter {
-            self.push_diagnostic(format!(
-                "autosplit: endOfChapter 0x{:X} -> 0x{:X} | capítulo {} -> {} (delta {}) | igt {}s | \
-                 sala {} | screenState {} | fase {} | {}",
-                previous.end_of_chapter,
-                snapshot.end_of_chapter,
-                previous_chapter,
-                current_chapter,
-                chapter_delta,
-                snapshot.igt,
-                snapshot.room,
-                snapshot.screen_state,
-                phase_label(phase),
-                if chapter_split_emitted {
-                    "SPLIT"
-                } else if chapter_end_muted {
-                    "sem split: capítulo na lista chapterEndsWithoutSplit, a porta fecha o limite"
-                } else if chapter_advanced {
-                    "avanço aceito, mas o timer não está rodando"
-                } else {
-                    "sem split"
-                },
-            ));
-        }
-
-        // Registra toda mudança do campo da cutscene final, inclusive as recusadas. O split final
-        // acontece uma vez por run, então não há como reproduzi-lo à vontade: se ele falhar, o log
-        // precisa mostrar sozinho se o campo se moveu e por que a decisão foi a que foi.
-        if snapshot.movie != previous.movie {
-            self.push_diagnostic(format!(
-                "autosplit: movie {:?} -> {:?} | igt {}s | sala {} | screenState {} | \
-                 capítulo {} | fase {} | {}",
-                movie_label(previous.movie),
-                movie_label(snapshot.movie),
-                snapshot.igt,
-                snapshot.room,
-                snapshot.screen_state,
-                current_chapter,
-                phase_label(phase),
-                if should_split_final {
-                    "SPLIT final"
-                } else if self.final_split_emitted {
-                    "sem split: o final já fechou nesta tentativa"
-                } else if snapshot.room != RE4_ENDING_ROOM {
-                    "sem split: FMV fora da sala do jetski"
-                } else if snapshot.movie.and_then(|movie| {
-                    movie.get(RE4_MOVIE_NAME_START..).map(|name| name != RE4_ENDING_MOVIE_SUFFIX)
-                }) == Some(true)
-                {
-                    "sem split: não é o FMV do final"
-                } else {
-                    "sem split: o timer não está rodando"
-                },
-            ));
-        }
-
-        // O campo `room` só muda em porta, carregamento de stage e entrada/saída de tela de
-        // sistema, então logar a mudança é barato e é a única forma de ver por que um split não
-        // saiu: antes disso toda recusa era silenciosa.
-        if previous.room != snapshot.room {
-            // Mesma precedência do if/else acima: reset e start vencem o split.
-            let outcome = if should_reset {
-                "reset automático"
-            } else if should_start {
-                "start automático"
-            } else if door_split_emitted {
-                "SPLIT"
-            } else if self.pending_door_split.is_some() {
-                "pendente: o fim de capítulo splitou neste tick, a porta sai no próximo"
-            } else {
-                "sem split"
-            };
-            let origin = origin_before.map_or_else(|| "—".to_owned(), |room| room.to_string());
-            self.push_diagnostic(format!(
-                "autosplit: sala {} -> {} | origem {} | igt {}s | screenState {} | capítulo {} | fase {} | {} | {}",
-                previous.room,
-                snapshot.room,
-                origin,
-                snapshot.igt,
-                snapshot.screen_state,
-                snapshot.end_of_chapter >> 16,
-                phase_label(phase),
-                decision.label(),
-                outcome,
-            ));
         }
 
         self.latch_gameplay_room(snapshot);
 
-        self.update_pause_buffers(snapshot, timer.current_phase());
-
-        // Contagem de frames do jogo, com as exclusões do autosplitter oficial. Fica fora do `if`
-        // abaixo de propósito: acumular depende só do jogo, não da fase do timer, e é o que mantém o
-        // valor coerente se o timer for pausado e retomado no meio.
-        if !frames_are_paused(snapshot) {
-            // Só delta positivo. Dentro de um mesmo processo o contador é monotônico, mas um
-            // retrocesso por leitura ruim destruiria o tempo acumulado da run inteira.
-            self.elapsed_frames += (snapshot.total_frames - previous.total_frames).max(0);
-        }
-
-        if self.config.remove_loads && timer.current_phase() == TimerPhase::Running {
-            if !timer.is_game_time_initialized() {
-                timer.initialize_game_time();
-            }
-            // Equivale ao `isLoading { return true; }` do autosplitter oficial: o Game Time nunca
-            // anda por conta própria. Fica pausado permanentemente e recebe o valor calculado a cada
-            // tick, que é o uso que a própria doc do `set_game_time` descreve. O modelo anterior
-            // pausava e retomava conforme um critério de load; agora o tempo vem do jogo, e não do
-            // relógio de parede menos as pausas.
-            if !timer.is_game_time_paused() {
-                timer.pause_game_time();
-            }
-            if snapshot.frame_rate > 0 {
-                timer.set_game_time(TimeSpan::from_seconds(
-                    self.elapsed_frames as f64 / f64::from(snapshot.frame_rate),
-                ));
-            }
-        }
+        // LiveSplit `gameTime`: depois de start/split/reset, como o ASL. `start()` zera o game
+        // time interno; se isto rodasse antes, o overlay caía no RTA até o próximo tick.
+        self.sync_re4_game_time(timer, snapshot);
 
         timer_changed
+    }
+
+    /// Acumula frames de gameplay, com as exclusões do autosplitter oficial (`update` do ASL).
+    ///
+    /// Sem `.max(0)`: o oficial soma o delta cru. `totalFrames` é `long` (64 bit) e o jogo pode
+    /// atualizar as duas dwords em instantes diferentes; um poll rápido lê o valor rasgado, soma um
+    /// salto enorme e o tick seguinte traz o negativo que corrige. Descartar o negativo inflava o
+    /// LRT no meio do gameplay, antes de qualquer porta.
+    fn accumulate_re4_frames(&mut self, previous: Re4Snapshot, snapshot: Re4Snapshot) {
+        if frames_are_paused(snapshot) {
+            return;
+        }
+        let delta = snapshot.total_frames - previous.total_frames;
+        if is_options_menu(previous) {
+            // O oficial soma `current - old` ao sair das opções. Poll saudável deixa leftover
+            // 1–2, e o LiveSplit soma até o flash de um tick do mash: adiar essa soma até o
+            // tick seguinte deixou o GTS 5 frames atrás em 43 despausas. Poll atrasado deixa
+            // dezenas e engole o menu — isso continua de fora.
+            let added = if (1..=2).contains(&delta) { delta } else { 0 };
+            self.elapsed_frames += added;
+            return;
+        }
+        self.elapsed_frames += delta;
+    }
+
+    /// Sincroniza o Game Time com `elapsed_frames / frameRate`, como o `gameTime` do ASL oficial.
+    ///
+    /// LiveSplit só chama `gameTime` com o timer rodando ou pausado manualmente. Com
+    /// `isLoading { return true; }`, o relógio nunca avança sozinho — recebe só este valor.
+    fn sync_re4_game_time(&mut self, timer: &mut Timer, snapshot: Re4Snapshot) {
+        if !self.config.remove_loads {
+            return;
+        }
+        if !matches!(
+            timer.current_phase(),
+            TimerPhase::Running | TimerPhase::Paused
+        ) {
+            return;
+        }
+        if !timer.is_game_time_initialized() {
+            timer.initialize_game_time();
+        }
+        if !timer.is_game_time_paused() {
+            timer.pause_game_time();
+        }
+        if snapshot.frame_rate > 0 {
+            timer.set_game_time(TimeSpan::from_seconds(game_time_seconds(
+                self.elapsed_frames,
+                snapshot.frame_rate,
+            )));
+        }
     }
 
     fn try_attach(&mut self) -> bool {
@@ -1170,12 +967,6 @@ impl Autosplitter {
         }
     }
 
-    /// O IGT caiu para zero e ficou lá tempo suficiente para ser New Game, não um stage load.
-    fn igt_zero_confirmed(&self) -> bool {
-        self.igt_zero_since
-            .is_some_and(|since| since.elapsed() >= IGT_RESET_CONFIRM_WINDOW)
-    }
-
     /// Esquece a rota da tentativa: pares já usados, sala de origem e janela de reset.
     fn forget_route(&mut self) {
         self.completed_doors.clear();
@@ -1185,114 +976,6 @@ impl Autosplitter {
         self.pending_door_split = None;
         self.last_split_door = None;
         self.final_split_emitted = false;
-    }
-
-    /// Registra uma vez qual região a varredura está cobrindo.
-    fn announce_probe(&mut self) {
-        if self.probe_announced || !self.probe.is_enabled() {
-            return;
-        }
-        self.probe_announced = true;
-        let description = self.probe.describe();
-        self.push_diagnostic(format!("autosplit: {description}"));
-    }
-
-    /// Reamostra a varredura e reporta as offsets que avançaram um degrau de capítulo.
-    ///
-    /// Empréstimos disjuntos de campos: `self.process` sai como referência imutável enquanto
-    /// `self.probe` e `self.diagnostics` saem como mutáveis, o que o borrow checker aceita dentro
-    /// de um mesmo corpo de função.
-    fn sample_probe(&mut self) {
-        if !self.probe.is_enabled() {
-            return;
-        }
-        if self
-            .last_probe_sample
-            .is_some_and(|last| last.elapsed() < PROBE_SAMPLE_INTERVAL)
-        {
-            return;
-        }
-        self.last_probe_sample = Some(Instant::now());
-
-        let Some(process) = self.process.as_ref() else {
-            return;
-        };
-        let candidates = self.probe.sample(process);
-        for candidate in candidates {
-            let line = format!(
-                "autosplit: CANDIDATO de capítulo em bio4.exe+0x{:X} | {} -> {} (capítulo {})",
-                candidate.offset,
-                candidate.from,
-                candidate.to,
-                candidate.to >> 16
-            );
-            self.push_diagnostic(line);
-        }
-    }
-
-    /// Resumo periódico de todos os campos lidos, para o diagnóstico não depender de acontecer
-    /// alguma transição.
-    fn heartbeat(
-        &mut self,
-        snapshot: Re4Snapshot,
-        phase: Option<TimerPhase>,
-        game_name: Option<&str>,
-    ) {
-        if self
-            .last_heartbeat
-            .is_some_and(|last| last.elapsed() < HEARTBEAT_INTERVAL)
-        {
-            return;
-        }
-        self.last_heartbeat = Some(Instant::now());
-
-        let version = self.offsets.map_or("?", |offsets| offsets.label);
-        let end_of_chapter_offset = self.offsets.map_or(0, |offsets| offsets.end_of_chapter);
-        let movie_offset = self.offsets.map_or(0, |offsets| offsets.movie);
-        let game_time = f64::from(snapshot.frame_rate.max(1));
-        let line = format!(
-            "autosplit[estado]: versão {} | status {} | sala {} | screenState {} | menuType {} | \
-             currentScreen {:?} | igt {}s | endOfChapter {} = 0x{:X} (capítulo {}) @ bio4.exe+0x{:X} | \
-             chapterKills {:?} | dinheiro {:?} | personagem {} | \
-             frameRate {} | totalFrames {} | framesContados {} | gameTime {:.3}s | contando {} | \
-             movie {:?} @ bio4.exe+0x{:X} | finalJaSaiu {} | \
-             fase {} | run {:?} | runAceita {} | splitPorta {} | splitCapitulo {}",
-            version,
-            self.status,
-            snapshot.room,
-            snapshot.screen_state,
-            snapshot.menu_type,
-            snapshot.current_screen,
-            snapshot.igt,
-            snapshot.end_of_chapter,
-            snapshot.end_of_chapter,
-            snapshot.end_of_chapter >> 16,
-            end_of_chapter_offset,
-            snapshot.chapter_kills,
-            snapshot.money,
-            snapshot.character,
-            snapshot.frame_rate,
-            snapshot.total_frames,
-            self.elapsed_frames,
-            self.elapsed_frames as f64 / game_time,
-            !frames_are_paused(snapshot),
-            movie_label(snapshot.movie),
-            movie_offset,
-            self.final_split_emitted,
-            phase.map_or("sem run", phase_label),
-            game_name.unwrap_or("—"),
-            game_name.is_some_and(is_re4_uhd_run),
-            self.config.split_on_doors,
-            self.config.split_on_chapters,
-        );
-        self.push_diagnostic(line);
-    }
-
-    fn push_diagnostic(&mut self, line: String) {
-        if self.diagnostics.len() >= DIAGNOSTICS_CAPACITY {
-            self.diagnostics.remove(0);
-        }
-        self.diagnostics.push(line);
     }
 
     fn read_snapshot(&self) -> Result<Re4Snapshot, String> {
@@ -1416,27 +1099,6 @@ fn read_re4_snapshot(process: &ProcessReader, offsets: Re4Offsets) -> Result<Re4
     })
 }
 
-/// Nome do FMV legível para o log, com os bytes não imprimíveis trocados por ponto.
-///
-/// O campo é preenchido com lixo quando nenhum filme está tocando, então imprimir cru sujaria o log.
-fn movie_label(movie: Option<[u8; 7]>) -> String {
-    movie.map_or_else(
-        || "—".to_owned(),
-        |bytes| {
-            bytes
-                .iter()
-                .map(|byte| {
-                    if byte.is_ascii_graphic() {
-                        char::from(*byte)
-                    } else {
-                        '.'
-                    }
-                })
-                .collect()
-        },
-    )
-}
-
 fn is_re4_uhd_run(game_name: &str) -> bool {
     let normalized = game_name.to_ascii_lowercase();
     let is_re4 = normalized.contains("resident evil 4")
@@ -1489,6 +1151,7 @@ fn is_tutorial(snapshot: Re4Snapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use livesplit_core::{Run, Segment};
 
     /// Snapshot mínimo para exercitar a decisão de porta. Os campos que não participam dela
     /// ficam em valores de gameplay normal.
@@ -1885,7 +1548,184 @@ mod tests {
         // Uma hora e meia a 60 fps, a ordem de grandeza de uma run completa.
         let frames: i64 = 324_000;
 
-        assert_eq!(frames as f64 / f64::from(60_u8), 5_400.0);
+        assert_eq!(game_time_seconds(frames, 60), 5_400.0);
+        assert_eq!(game_time_seconds(frames, 0), 0.0);
+    }
+
+    /// Load e pausa não somam o delta de `totalFrames`. Sem isto cada porta atrasada no poll
+    /// virava tempo de jogo, e o LRT saía na frente do LiveSplit.
+    #[test]
+    fn load_e_pausa_nao_contam_frames() {
+        let mut splitter = Autosplitter::default();
+        let jogando = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        let carregando = Re4Snapshot {
+            total_frames: 1_060,
+            ..snapshot_on_screen(310, SCREEN_STATE_CARREGANDO, 0)
+        };
+        let pausado = Re4Snapshot {
+            total_frames: 1_120,
+            ..snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(jogando, carregando);
+        assert_eq!(splitter.elapsed_frames, 0);
+
+        splitter.accumulate_re4_frames(jogando, pausado);
+        assert_eq!(splitter.elapsed_frames, 0);
+
+        let depois = Re4Snapshot {
+            total_frames: 1_060,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        splitter.accumulate_re4_frames(jogando, depois);
+        assert_eq!(splitter.elapsed_frames, 60);
+    }
+
+    /// Despausa: leftover enorme (menu inteiro) não entra no LRT. Leftover de 1–2, o do oficial
+    /// num poll de 15 ms, entra — sem isto o GTS fica ~1 frame atrás por pausa.
+    #[test]
+    fn despausa_nao_engole_o_menu() {
+        let mut splitter = Autosplitter::default();
+        let pausado = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0)
+        };
+        let jogando = Re4Snapshot {
+            total_frames: 1_030,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(pausado, jogando);
+        assert_eq!(splitter.elapsed_frames, 0);
+    }
+
+    #[test]
+    fn despausa_soma_o_leftover_curto_do_oficial() {
+        let mut splitter = Autosplitter::default();
+        let pausado = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0)
+        };
+        let jogando = Re4Snapshot {
+            total_frames: 1_001,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(pausado, jogando);
+        assert_eq!(splitter.elapsed_frames, 1);
+    }
+
+    /// Mash 6→3→6 dentro de um poll: o LiveSplit soma esse leftover. Medido em jogo,
+    /// adiar a soma até o tick seguinte descartou 5 frames em 43 despausas e deixou o
+    /// GTS 12,21 contra 12,30 do LiveSplit.
+    #[test]
+    fn flash_de_um_tick_soma_leftover_como_o_oficial() {
+        let mut splitter = Autosplitter::default();
+        let pausado = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0)
+        };
+        let jogando = Re4Snapshot {
+            total_frames: 1_001,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        let de_novo = Re4Snapshot {
+            total_frames: 1_002,
+            ..snapshot_on_screen(310, RE4_OPTIONS_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(pausado, jogando);
+        splitter.accumulate_re4_frames(jogando, de_novo);
+        assert_eq!(splitter.elapsed_frames, 1);
+    }
+
+    /// Gameplay contínuo continua somando o delta inteiro. A despausa das opções não corta isto.
+    #[test]
+    fn teto_da_despausa_nao_corta_gameplay() {
+        let mut splitter = Autosplitter::default();
+        let antes = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        let depois = Re4Snapshot {
+            total_frames: 1_060,
+            ..snapshot_on_screen(310, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(antes, depois);
+        assert_eq!(splitter.elapsed_frames, 60);
+    }
+
+    /// Leitura rasgada de `totalFrames` (dword alta muda sozinha). O ASL soma o negativo no tick
+    /// seguinte e o LRT volta ao valor real. `.max(0)` engolia essa correção e o GTS ficava na
+    /// frente do LiveSplit no meio do 1-1, sem passar por porta nenhuma.
+    #[test]
+    fn leitura_rasgada_de_total_frames_se_corrige() {
+        let mut splitter = Autosplitter::default();
+        let antes = Re4Snapshot {
+            total_frames: 1_000,
+            ..snapshot_on_screen(256, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        let rasgado = Re4Snapshot {
+            total_frames: 1_000 + (1i64 << 32),
+            ..snapshot_on_screen(256, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+        let depois = Re4Snapshot {
+            total_frames: 1_060,
+            ..snapshot_on_screen(256, RE4_GAMEPLAY_SCREEN_STATE, 0)
+        };
+
+        splitter.accumulate_re4_frames(antes, rasgado);
+        splitter.accumulate_re4_frames(rasgado, depois);
+        assert_eq!(splitter.elapsed_frames, 60);
+    }
+
+    /// Start/reset manuais só passam por `reset_attempt_metrics`. Sem zerar frames e `previous`,
+    /// o LRT herdava o título e somava o vão título → agora no primeiro tick da tentativa.
+    #[test]
+    fn start_manual_zera_lrt_e_descarta_o_vao_do_titulo() {
+        let mut splitter = Autosplitter::default();
+        splitter.elapsed_frames = 12_000;
+        splitter.previous = Some(snapshot_on_screen(
+            RE4_SYSTEM_ROOM,
+            RE4_GAMEPLAY_SCREEN_STATE,
+            0,
+        ));
+
+        splitter.reset_attempt_metrics();
+
+        assert_eq!(splitter.elapsed_frames, 0);
+        assert!(splitter.previous.is_none());
+    }
+
+    /// `start()` do livesplit-core zera o game time interno. O sync tem que repor LRT = 0 no
+    /// mesmo tick, senão o overlay mostra RTA até a próxima amostra.
+    #[test]
+    fn start_recoloca_game_time_zerado_no_mesmo_tick() {
+        let mut run = Run::new();
+        run.push_segment(Segment::new("A"));
+        let mut timer = Timer::new(run).expect("run com um segmento");
+        let mut splitter = Autosplitter::default();
+        splitter.elapsed_frames = 1_800;
+
+        timer.start();
+        splitter.elapsed_frames = 0;
+        splitter.sync_re4_game_time(&mut timer, snapshot(256, 0));
+
+        let game_time = timer
+            .snapshot()
+            .current_time()
+            .game_time
+            .expect("game time inicializado");
+        assert!(
+            game_time.total_milliseconds().abs() < 0.5,
+            "game time deveria ser 0, veio {}",
+            game_time.total_milliseconds()
+        );
+        assert!(timer.is_game_time_paused());
     }
 
     /// Sequência real do fim do capítulo 8: a porta 527 -> 518 splitava e 0,975 s depois o capítulo
@@ -2366,21 +2206,30 @@ mod tests {
 
         assert!(splitter.completed_doors.is_empty());
         assert_eq!(splitter.last_gameplay_room, None);
+        assert_eq!(splitter.elapsed_frames, 0);
+        assert!(splitter.previous.is_none());
         assert_eq!(
             splitter.evaluate_door(snapshot(311, 601)),
             DoorDecision::NoOrigin
         );
     }
 
-    /// Um único tick com IGT zerado é o que a reinicialização de stage produz, e não pode
-    /// derrubar a tentativa.
+    /// Pausa → título: IGT cai a 0 na sala 288 no mesmo tick. O oficial reseta nessa borda;
+    /// esperar 750 ms deixava o GTS somando o FMV do título.
     #[test]
-    fn igt_zerado_por_um_tick_nao_confirma_reset() {
-        let mut splitter = Autosplitter::default();
-        splitter.track_igt_zero(snapshot(310, 600), snapshot(310, 0));
+    fn borda_de_descida_do_igt_reseta_como_o_oficial() {
+        let na_pausa = Re4Snapshot {
+            screen_state: RE4_OPTIONS_SCREEN_STATE,
+            ..snapshot(553, 600)
+        };
+        let no_titulo = Re4Snapshot {
+            screen_state: 0,
+            ..snapshot(RE4_SYSTEM_ROOM, 0)
+        };
 
-        assert!(splitter.igt_zero_since.is_some());
-        assert!(!splitter.igt_zero_confirmed());
+        assert!(igt_falling_edge(na_pausa, no_titulo));
+        assert!(!igt_falling_edge(no_titulo, no_titulo));
+        assert!(!igt_falling_edge(snapshot(256, 0), snapshot(256, 0)));
     }
 
     #[test]
@@ -2390,7 +2239,6 @@ mod tests {
         splitter.track_igt_zero(snapshot(310, 0), snapshot(310, 600));
 
         assert!(splitter.igt_zero_since.is_none());
-        assert!(!splitter.igt_zero_confirmed());
     }
 
     /// Sem a borda de descida a janela não arma, então o primeiro segundo de uma run nova (IGT
@@ -2401,16 +2249,6 @@ mod tests {
         splitter.track_igt_zero(snapshot(256, 0), snapshot(256, 0));
 
         assert!(splitter.igt_zero_since.is_none());
-    }
-
-    #[test]
-    fn janela_confirmada_depois_do_prazo() {
-        let splitter = Autosplitter {
-            igt_zero_since: Some(Instant::now() - IGT_RESET_CONFIRM_WINDOW),
-            ..Default::default()
-        };
-
-        assert!(splitter.igt_zero_confirmed());
     }
 
     /// O bug relatado: o fim de 1-2 é um evento de capítulo, não de porta. O contador subindo tem

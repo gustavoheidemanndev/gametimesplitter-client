@@ -1,4 +1,5 @@
 mod autosplit;
+#[allow(dead_code)]
 mod chapter_probe;
 mod process_memory;
 
@@ -349,11 +350,6 @@ impl Engine {
         Ok(self.state())
     }
 
-    /// Linhas de diagnóstico do autosplit acumuladas desde a última drenagem.
-    fn drain_autosplit_diagnostics(&mut self) -> Vec<String> {
-        self.autosplit.drain_diagnostics()
-    }
-
     fn tick_autosplit(&mut self) {
         let best_segments_before = self.effective_best_segment_times();
         let phase_before = self.timer.as_ref().map(Timer::current_phase);
@@ -591,54 +587,6 @@ fn emit_state(output: &SharedOutput, state: TimerState) -> io::Result<()> {
     emit_json(output, &json!({ "event": "state", "data": state }))
 }
 
-/// Evento de log. O cliente desktop o encaminha para a atividade da janela principal sem
-/// marcar como erro, diferente do que sai por stderr.
-fn emit_log(output: &SharedOutput, message: &str) -> io::Result<()> {
-    emit_json(output, &json!({ "event": "log", "data": message }))
-}
-
-/// Caminho do arquivo de diagnóstico do autosplit.
-///
-/// Existe porque pedir para o usuário ler a lista de atividade da janela não fechou o diagnóstico
-/// nas tentativas anteriores. Em arquivo, a sessão inteira pode ser anexada de uma vez.
-fn autosplit_log_path() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("GTS_AUTOSPLIT_LOG") {
-        return Some(PathBuf::from(explicit));
-    }
-    let base = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("TEMP"))?;
-    Some(
-        PathBuf::from(base)
-            .join("GameTimeSplitter")
-            .join("autosplit-debug.log"),
-    )
-}
-
-/// Acrescenta as linhas ao arquivo de diagnóstico, com o tempo decorrido desde o início da
-/// sessão. O carimbo é o que permite casar um candidato da varredura com o instante em que a
-/// cutscene de fim de capítulo começou. Falha em silêncio: diagnóstico nunca deve derrubar o timer.
-fn append_autosplit_log(path: Option<&Path>, started: Instant, lines: &[String]) {
-    let Some(path) = path else { return };
-    if lines.is_empty() {
-        return;
-    }
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    // BOM só na criação: sem ele o Get-Content do PowerShell 5.1 lê o UTF-8 como ANSI e os
-    // acentos viram lixo, o que atrapalha justamente quem vai colar o arquivo.
-    let needs_bom = !path.exists();
-    let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) else {
-        return;
-    };
-    if needs_bom {
-        let _ = file.write_all(&[0xEF, 0xBB, 0xBF]);
-    }
-    let elapsed = started.elapsed().as_secs_f64();
-    for line in lines {
-        let _ = writeln!(file, "[{elapsed:9.3}s] {line}");
-    }
-}
-
 fn payload<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|error| format!("Payload inválido: {error}"))
 }
@@ -680,7 +628,15 @@ fn process_request(engine: &mut Engine, request: &Request) -> Result<Value, Stri
     serde_json::to_value(state).map_err(|error| error.to_string())
 }
 
+fn enable_high_resolution_timer() {
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::Media::timeBeginPeriod(1);
+    }
+}
+
 fn main() -> io::Result<()> {
+    enable_high_resolution_timer();
     let engine = Arc::new(Mutex::new(Engine::default()));
     let output = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     let running = Arc::new(AtomicBool::new(true));
@@ -697,49 +653,34 @@ fn main() -> io::Result<()> {
     let ticker_output = Arc::clone(&output);
     let ticker_running = Arc::clone(&running);
     let ticker = thread::spawn(move || {
-        let log_path = autosplit_log_path();
-        let started = Instant::now();
-        append_autosplit_log(
-            log_path.as_deref(),
-            started,
-            &[format!(
-                "===== sessão iniciada, sidecar {} =====",
-                env!("CARGO_PKG_VERSION")
-            )],
-        );
         let mut last_emit = Instant::now();
+        // LiveSplit.ScriptableAutoSplit: `new Timer { Interval = 15 }` ("a little faster than
+        // 60hz"). O ASL do RE4 não mexe em `refreshRate`, então fica nisto. Dormir 16 ms *antes*
+        // da leitura fazia o período ser 16 ms + trabalho; na despausa o oficial soma o delta de
+        // `totalFrames` (que continua subindo no menu) e cada pausa empurrava o GTS alguns ms.
+        let period = Duration::from_millis(15);
         while ticker_running.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(16));
-            let (state, diagnostics) = {
+            let tick_started = Instant::now();
+            let state = {
                 let mut engine = ticker_engine
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 engine.tick_autosplit();
-                let diagnostics = engine.drain_autosplit_diagnostics();
-                let state = if last_emit.elapsed() >= Duration::from_millis(100) {
+                if last_emit.elapsed() >= Duration::from_millis(100) {
                     last_emit = Instant::now();
                     Some(engine.state())
                 } else {
                     None
-                };
-                (state, diagnostics)
-            };
-            // Emitidas fora do lock, para a atividade da janela e para o arquivo.
-            append_autosplit_log(log_path.as_deref(), started, &diagnostics);
-            let mut emit_failed = false;
-            for line in &diagnostics {
-                if emit_log(&ticker_output, line).is_err() {
-                    emit_failed = true;
-                    break;
                 }
-            }
-            if emit_failed {
-                break;
-            }
+            };
             if let Some(state) = state {
                 if emit_state(&ticker_output, state).is_err() {
                     break;
                 }
+            }
+            let elapsed = tick_started.elapsed();
+            if elapsed < period {
+                thread::sleep(period - elapsed);
             }
         }
     });
