@@ -209,21 +209,26 @@ const bestPossibleTimeMs = (state) => {
 /**
  * Delta da run atual contra Best Split Times: o melhor pace cumulativo já feito, não o PB.
  *
+ * Só recalcula quando um split fecha (igual ao Previous Segment): o valor fica fixo até o
+ * próximo split. Antes do primeiro split, não há delta.
+ *
  * Negativo = adiantado em relação a esse pace.
  */
 const bestSplitTimesDeltaMs = (state) => {
   const segments = state?.available ? state.segments : [];
   if (!segments.length || !state.available || state.phase === 'notRunning') return null;
 
-  const index = state.phase === 'ended' ? segments.length - 1 : runningSegmentIndex(state);
-  if (index === null) return null;
+  const currentIndex = state.phase === 'ended'
+    ? segments.length - 1
+    : runningSegmentIndex(state);
+  if (currentIndex === null) return null;
+  const index = state.phase === 'ended' ? currentIndex : currentIndex - 1;
+  if (index < 0) return null;
+
+  const split = segments[index]?.splitTimeMs;
   const best = segments[index]?.bestSplitTimeMs;
-  if (best === null || best === undefined) return null;
-  if (state.phase === 'ended') {
-    const split = segments[index]?.splitTimeMs;
-    return split === null || split === undefined ? null : split - best;
-  }
-  return (state.currentTimeMs || 0) - best;
+  if (split === null || split === undefined || best === null || best === undefined) return null;
+  return split - best;
 };
 
 const renderTitle = (state) => {
