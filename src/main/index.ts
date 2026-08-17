@@ -141,7 +141,7 @@ const getState = (): AppState => ({
     active: isViewerSession(),
     rooms: viewerRaceSync?.getRooms() ?? [],
     watchingRaceId: viewerRaceSync?.getWatchingRaceId() ?? null,
-    overlay: viewerRaceSync?.getOverlayState() ?? null,
+    overlay: resolveViewerOverlayState(),
     overlayOpen: Boolean(viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()),
   },
   update: appUpdater.getStatus(),
@@ -340,12 +340,26 @@ const broadcastViewerRooms = (rooms: ViewerRoomView[]): void => {
   });
 };
 
+/** Preview do modo teste: sobrescreve a sala assistida enquanto estiver ativo. */
+let viewerOverlayPreview: ViewerOverlayState | null = null;
+
+const resolveViewerOverlayState = (): ViewerOverlayState | null =>
+  viewerOverlayPreview ?? viewerRaceSync?.getOverlayState() ?? null;
+
 const broadcastViewerOverlayState = (state: ViewerOverlayState | null): void => {
+  // Poll ao vivo não apaga o preview: o usuário está calibrando a aparência.
+  const payload = viewerOverlayPreview ?? state;
   sendEvent({
     type: 'viewer-overlay-state',
-    message: state ? 'Corrida assistida atualizada.' : 'Nenhuma corrida sendo assistida.',
-    data: state,
+    message: payload ? 'Corrida assistida atualizada.' : 'Nenhuma corrida sendo assistida.',
+    data: payload,
   });
+};
+
+const setViewerOverlayPreview = (preview: ViewerOverlayState | null): ViewerOverlayState | null => {
+  viewerOverlayPreview = preview;
+  broadcastViewerOverlayState(viewerRaceSync?.getOverlayState() ?? null);
+  return resolveViewerOverlayState();
 };
 
 const broadcastViewerTheme = (theme: ViewerOverlayTheme): void => {
@@ -763,7 +777,10 @@ const applySessionRole = (): void => {
   const viewer = isViewerSession();
   raceSync?.setParticipantMode(!viewer);
   viewerRaceSync?.setActive(viewer);
-  if (!viewer) closeViewerOverlayWindow();
+  if (!viewer) {
+    viewerOverlayPreview = null;
+    closeViewerOverlayWindow();
+  }
 };
 
 const requireViewerSession = (): ViewerRaceSync => {
@@ -1111,7 +1128,34 @@ const registerIpcHandlers = (): void => {
     sendState('Você parou de assistir à corrida.');
     return getState();
   });
-  ipcMain.handle('viewer:get-overlay-state', () => viewerRaceSync?.getOverlayState() ?? null);
+  ipcMain.handle('viewer:get-overlay-state', () => resolveViewerOverlayState());
+  ipcMain.handle('viewer:set-preview', (_event, raw: unknown) => {
+    requireViewerSession();
+    if (raw === null || raw === undefined) {
+      return setViewerOverlayPreview(null);
+    }
+    if (!raw || typeof raw !== 'object') {
+      throw new Error('Preview da overlay de espectador inválido.');
+    }
+    const source = raw as { leaderUsername?: unknown; deltaMs?: unknown };
+    const leaderUsername = typeof source.leaderUsername === 'string'
+      ? source.leaderUsername.trim().slice(0, 24)
+      : '';
+    const deltaMs = typeof source.deltaMs === 'number' && Number.isFinite(source.deltaMs)
+      ? Math.round(source.deltaMs)
+      : null;
+    if (!leaderUsername || deltaMs === null) {
+      throw new Error('Informe um nick e um delta numéricos para o modo teste.');
+    }
+    createViewerOverlayWindow();
+    return setViewerOverlayPreview({
+      raceId: 'preview',
+      status: 'running',
+      leaderUsername,
+      deltaMs,
+      commonSplitOrder: 1,
+    });
+  });
   ipcMain.handle('viewer:overlay-open', () => {
     requireViewerSession();
     createViewerOverlayWindow();

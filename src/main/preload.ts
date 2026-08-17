@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('gameTimeSpliter', {
   watchViewerRace: (raceId: string) => ipcRenderer.invoke('viewer:watch', raceId),
   stopWatchingViewerRace: () => ipcRenderer.invoke('viewer:stop-watch'),
   getViewerOverlayState: () => ipcRenderer.invoke('viewer:get-overlay-state'),
+  setViewerOverlayPreview: (preview: { leaderUsername: string; deltaMs: number } | null) =>
+    ipcRenderer.invoke('viewer:set-preview', preview),
   openViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-open'),
   closeViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-close'),
   toggleViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-toggle'),

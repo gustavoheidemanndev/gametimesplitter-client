@@ -307,7 +307,14 @@ const updateState = (nextState) => {
   byId('login-view').classList.toggle('hidden', signedIn);
   byId('app-view').classList.toggle('hidden', !appAvailable);
   byId('viewer-view').classList.toggle('hidden', !viewerActive);
-  if (viewerActive) renderViewerMode(state.viewer);
+  if (viewerActive) {
+    renderViewerMode(state.viewer);
+  } else if (viewerTest.enabled) {
+    // Logout / troca de papel: limpa o checkbox local; o main já zera o preview.
+    const checkbox = byId('viewer-test-mode');
+    if (checkbox) checkbox.checked = false;
+    syncViewerTestFieldsEnabled();
+  }
   byId('connection-badge').textContent = state.authenticated
     ? t('connection.authenticated')
     : state.offlineMode ? t('connection.offline') : t('connection.disconnected');
@@ -1040,6 +1047,73 @@ let viewerRooms = [];
 let viewerWatchingRaceId = null;
 let viewerOverlayOpen = false;
 const viewerTheme = { current: null, applying: false, timer: null, revision: 0, bound: false };
+const viewerTest = { enabled: false, timer: null };
+
+/** Aceita "-1.3", "+2", "1,30" (locale) e devolve milissegundos para a overlay. */
+const parseViewerTestDeltaSeconds = (raw) => {
+  const normalized = String(raw ?? '').trim().replace(',', '.');
+  if (!normalized) return null;
+  const seconds = Number(normalized);
+  if (!Number.isFinite(seconds)) return null;
+  return Math.round(seconds * 1_000);
+};
+
+const syncViewerTestFieldsEnabled = () => {
+  const enabled = Boolean(byId('viewer-test-mode')?.checked);
+  const fields = byId('viewer-test-fields');
+  if (fields) fields.hidden = !enabled;
+  const nick = byId('viewer-test-nick');
+  const delta = byId('viewer-test-delta');
+  if (nick) nick.disabled = !enabled;
+  if (delta) delta.disabled = !enabled;
+  viewerTest.enabled = enabled;
+};
+
+const pushViewerTestPreview = async ({ announce = false } = {}) => {
+  syncViewerTestFieldsEnabled();
+  if (!viewerTest.enabled) {
+    await bridge.setViewerOverlayPreview(null);
+    if (announce) addLog(t('log.viewer.testModeOff'));
+    return;
+  }
+  const nick = String(byId('viewer-test-nick')?.value ?? '').trim();
+  if (!nick) throw new Error(t('error.viewer.testNick'));
+  const deltaMs = parseViewerTestDeltaSeconds(byId('viewer-test-delta')?.value);
+  if (deltaMs === null) throw new Error(t('error.viewer.testDelta'));
+  await bridge.setViewerOverlayPreview({ leaderUsername: nick, deltaMs });
+  if (announce) addLog(t('log.viewer.testModeOn'));
+  updateState(await bridge.getState());
+};
+
+const scheduleViewerTestPreview = () => {
+  if (viewerTest.timer) clearTimeout(viewerTest.timer);
+  viewerTest.timer = setTimeout(async () => {
+    viewerTest.timer = null;
+    try {
+      await pushViewerTestPreview();
+    } catch (error) {
+      addLog(t('log.viewer.testModeFailed', { error: errorMessage(error) }), true);
+    }
+  }, 150);
+};
+
+const bindViewerTestMode = () => {
+  const checkbox = byId('viewer-test-mode');
+  if (!checkbox || checkbox.dataset.bound === '1') return;
+  checkbox.dataset.bound = '1';
+  syncViewerTestFieldsEnabled();
+  checkbox.addEventListener('change', async () => {
+    try {
+      await pushViewerTestPreview({ announce: true });
+    } catch (error) {
+      checkbox.checked = false;
+      syncViewerTestFieldsEnabled();
+      addLog(t('log.viewer.testModeFailed', { error: errorMessage(error) }), true);
+    }
+  });
+  byId('viewer-test-nick').addEventListener('input', scheduleViewerTestPreview);
+  byId('viewer-test-delta').addEventListener('input', scheduleViewerTestPreview);
+};
 
 const viewerNumericFields = [
   'fontWeight', 'timeFontWeight', 'nameFontSize', 'deltaFontSize',
@@ -1259,6 +1333,7 @@ const initViewerTheme = async () => {
     viewerTheme.current = theme;
     applyViewerThemeToInputs(theme);
     bindViewerThemeControls();
+    bindViewerTestMode();
   } catch (error) {
     viewerTheme.bound = false;
     addLog(t('log.viewer.themeLoadFailed', { error: errorMessage(error) }), true);

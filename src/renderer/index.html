@@ -304,10 +304,25 @@
           <h2 data-i18n="viewer.overlayPanelTitle">Spectator overlay</h2>
           <p class="muted" data-i18n="viewer.overlayHint">Borderless window with the leader and the delta. In OBS, use Window Capture and select “Game Time Splitter - Viewer Overlay”.</p>
         </div>
-        <div class="row">
+          <div class="row">
           <button id="viewer-toggle-overlay" class="secondary" data-i18n="viewer.openOverlay">Open spectator overlay</button>
           <button id="viewer-stop-watch" class="secondary" disabled data-i18n="viewer.stopWatching">Stop watching</button>
           <span id="viewer-watch-status" class="muted" data-i18n="viewer.notWatching">You are not watching any race.</span>
+        </div>
+        <div class="viewer-test-mode panel-inset">
+          <label class="viewer-test-toggle">
+            <input id="viewer-test-mode" type="checkbox">
+            <span data-i18n="viewer.testMode">Test mode</span>
+          </label>
+          <p class="muted viewer-test-hint" data-i18n="viewer.testModeHint">Preview the overlay with sample values while you adjust the appearance.</p>
+          <div id="viewer-test-fields" class="viewer-test-fields" hidden>
+            <label><span data-i18n="viewer.testNick">Leader nick</span>
+              <input id="viewer-test-nick" type="text" maxlength="24" value="Teste" disabled>
+            </label>
+            <label><span data-i18n="viewer.testDelta">Delta (seconds)</span>
+              <input id="viewer-test-delta" type="text" value="-1.3" inputmode="decimal" disabled>
+            </label>
+          </div>
         </div>
         <details class="theme-panel">
           <summary data-i18n="viewer.appearance">Spectator overlay appearance</summary>
