@@ -282,6 +282,98 @@
       </section>
     </section>
 
+    <section id="viewer-view" class="hidden">
+      <div class="toolbar panel">
+        <div><strong id="viewer-user-name"></strong><span id="viewer-user-email" class="muted"></span></div>
+        <div class="row">
+          <span class="badge online" data-i18n="viewer.role">Spectator</span>
+          <button id="viewer-logout" class="secondary" data-i18n="user.logout">Sign out</button>
+        </div>
+      </div>
+
+      <section class="panel stack">
+        <div>
+          <h2 data-i18n="viewer.roomsTitle">Live race rooms</h2>
+          <p class="muted" data-i18n="viewer.roomsHint">Rooms waiting for players and races in progress. Watch is available once a race starts.</p>
+        </div>
+        <ol id="viewer-rooms" class="viewer-rooms"><li class="empty" data-i18n="viewer.emptyRooms">No live race rooms right now.</li></ol>
+      </section>
+
+      <section class="panel stack">
+        <div>
+          <h2 data-i18n="viewer.overlayPanelTitle">Spectator overlay</h2>
+          <p class="muted" data-i18n="viewer.overlayHint">Borderless window with the leader and the delta. In OBS, use Window Capture and select “Game Time Splitter - Viewer Overlay”.</p>
+        </div>
+        <div class="row">
+          <button id="viewer-toggle-overlay" class="secondary" data-i18n="viewer.openOverlay">Open spectator overlay</button>
+          <button id="viewer-stop-watch" class="secondary" disabled data-i18n="viewer.stopWatching">Stop watching</button>
+          <span id="viewer-watch-status" class="muted" data-i18n="viewer.notWatching">You are not watching any race.</span>
+        </div>
+        <details class="theme-panel">
+          <summary data-i18n="viewer.appearance">Spectator overlay appearance</summary>
+          <div class="theme-grid viewer-theme-grid">
+            <label><span data-i18n="theme.language">Language</span>
+              <select id="viewer-theme-language">
+                <option value="en" data-i18n="language.en">English</option>
+                <option value="pt-BR" data-i18n="language.pt-BR">Português (Brasil)</option>
+                <option value="es" data-i18n="language.es">Español</option>
+              </select>
+            </label>
+            <label><span data-i18n="theme.generalFont">General font</span>
+              <select id="viewer-theme-fontFamily"></select>
+            </label>
+            <label><span data-i18n="theme.timeFont">Time font</span>
+              <select id="viewer-theme-timeFontFamily"></select>
+            </label>
+            <label><span data-i18n="theme.generalWeight">General weight</span>
+              <input id="viewer-theme-fontWeight" type="number" min="100" max="900" step="100">
+            </label>
+            <label><span data-i18n="theme.timeWeight">Time weight</span>
+              <input id="viewer-theme-timeFontWeight" type="number" min="100" max="900" step="100">
+            </label>
+            <label><span data-i18n="viewer.nameSize">Leader name</span> <span data-value-for="viewer-theme-nameFontSize">20</span><span data-i18n="unit.px">px</span>
+              <input id="viewer-theme-nameFontSize" type="range" min="8" max="80" step="1">
+            </label>
+            <label><span data-i18n="viewer.deltaSize">Delta</span> <span data-value-for="viewer-theme-deltaFontSize">30</span><span data-i18n="unit.px">px</span>
+              <input id="viewer-theme-deltaFontSize" type="range" min="8" max="120" step="1">
+            </label>
+            <label><span data-i18n="theme.padding">Inner spacing</span> <span data-value-for="viewer-theme-padding">10</span><span data-i18n="unit.px">px</span>
+              <input id="viewer-theme-padding" type="range" min="0" max="60" step="1">
+            </label>
+            <label><span data-i18n="theme.corners">Corners</span> <span data-value-for="viewer-theme-borderRadius">0</span><span data-i18n="unit.px">px</span>
+              <input id="viewer-theme-borderRadius" type="range" min="0" max="40" step="1">
+            </label>
+            <label><span data-i18n="theme.backgroundOpacity">Background opacity</span> <span data-value-for="viewer-theme-backgroundOpacity">88</span><span data-i18n="unit.percent">%</span>
+              <input id="viewer-theme-backgroundOpacity" type="range" min="0" max="100" step="1">
+            </label>
+            <label><span data-i18n="theme.border">Border</span> <span data-value-for="viewer-theme-borderWidth">1</span><span data-i18n="unit.px">px</span>
+              <input id="viewer-theme-borderWidth" type="range" min="0" max="8" step="1">
+            </label>
+            <label class="color-input"><span data-i18n="theme.background">Background</span> <input id="viewer-theme-backgroundColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.border">Border</span> <input id="viewer-theme-borderColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.text">Text</span> <input id="viewer-theme-textColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.mutedText">Muted text</span> <input id="viewer-theme-mutedColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.ahead">Ahead</span> <input id="viewer-theme-aheadColor" type="color"></label>
+            <label class="color-input"><span data-i18n="theme.behind">Behind</span> <input id="viewer-theme-behindColor" type="color"></label>
+            <label><span data-i18n="viewer.alignment">Alignment</span>
+              <select id="viewer-theme-alignment">
+                <option value="spread" data-i18n="viewer.alignmentSpread">Name left, delta right</option>
+                <option value="left" data-i18n="theme.left">Left</option>
+                <option value="center" data-i18n="theme.center">Center</option>
+                <option value="right" data-i18n="theme.right">Right</option>
+              </select>
+            </label>
+          </div>
+          <div class="theme-toggles viewer-theme-toggles">
+            <label><input id="viewer-theme-compactTime" type="checkbox"> <span data-i18n="theme.compactTime">Compact time (without centiseconds)</span></label>
+          </div>
+          <div class="theme-actions">
+            <button id="viewer-theme-reset" class="secondary" type="button" data-i18n="theme.reset">Restore default</button>
+          </div>
+        </details>
+      </section>
+    </section>
+
     <section class="panel log-panel">
       <h2 data-i18n="activity.title">Activity</h2>
       <ol id="activity-log"><li data-i18n="activity.ready">Ready to start.</li></ol>

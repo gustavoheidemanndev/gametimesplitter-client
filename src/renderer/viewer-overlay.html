@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:">
+  <title data-i18n="viewer.overlayTitle">Game Time Splitter Viewer Overlay</title>
+  <link rel="stylesheet" href="viewer-overlay.css">
+</head>
+<body>
+  <div id="root" class="viewer-overlay align-spread">
+    <header id="drag-bar" class="drag-bar">
+      <div class="drag-handle" title="Drag to move" data-i18n-title="overlay.drag"></div>
+      <button id="close-viewer-overlay" class="chip danger" type="button" title="Close overlay" data-i18n="common.closeSymbol" data-i18n-title="overlay.closeTitle">×</button>
+    </header>
+
+    <main class="viewer-line" aria-live="polite">
+      <span id="viewer-leader" class="viewer-leader" data-i18n="viewer.overlayEmpty">—</span>
+      <span id="viewer-delta" class="viewer-delta" data-i18n="viewer.overlayEmpty">—</span>
+    </main>
+  </div>
+  <script src="i18n.js"></script>
+  <script src="overlay-fonts.js"></script>
+  <script src="viewer-overlay.js"></script>
+</body>
+</html>

@@ -89,6 +89,7 @@ export class RaceSync {
   private inFlight?: Promise<void>;
   private timerChain: Promise<void> = Promise.resolve();
   private lastError?: string;
+  private participantMode = true;
 
   constructor(
     private readonly api: ApiClient,
@@ -107,6 +108,16 @@ export class RaceSync {
     this.sessionGeneration += 1;
   }
 
+  /**
+   * O papel `viewer` não participa de corridas: desligar o modo participante para a conta zera
+   * o poll de `/races/active` e o campo da corrida na overlay do runner.
+   */
+  setParticipantMode(enabled: boolean): void {
+    if (this.participantMode === enabled) return;
+    this.participantMode = enabled;
+    this.handleSessionChange(enabled && Boolean(this.api.getSession()));
+  }
+
   handleSessionChange(authenticated: boolean): void {
     this.sessionGeneration += 1;
     this.race = undefined;
@@ -118,7 +129,7 @@ export class RaceSync {
     this.settledRaceId = undefined;
     this.lastError = undefined;
     this.publish();
-    if (authenticated) void this.refresh();
+    if (authenticated && this.participantMode) void this.refresh();
   }
 
   getOverlayState(): RaceOverlayState | null {
@@ -162,7 +173,7 @@ export class RaceSync {
 
   private async pull(): Promise<void> {
     const session = this.api.getSession();
-    if (!session) {
+    if (!session || !this.participantMode) {
       this.applyRace(undefined);
       return;
     }
@@ -243,7 +254,7 @@ export class RaceSync {
     splits: RunSplitPayload[]
   ): Promise<void> {
     const race = this.race;
-    if (!race) return;
+    if (!race || !this.participantMode) return;
 
     // Corrida encerrada: o campo fica congelado com o delta final até o jogador começar outra
     // run sozinho, quando ele sai da overlay para não virar sujeira permanente.

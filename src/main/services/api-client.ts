@@ -3,6 +3,8 @@ import type {
   AuthSession,
   CloudLssFile,
   Game,
+  RaceRoomsOverviewResponse,
+  RaceSpectatorStateResponse,
   RaceStateResponse,
   ReportRaceSplitsPayload,
   RunPayload,
@@ -134,6 +136,22 @@ export class ApiClient {
 
   getRace(raceId: string): Promise<RaceStateResponse> {
     return this.request<RaceStateResponse>(`/races/${encodeURIComponent(raceId)}`, { method: 'GET' });
+  }
+
+  /** Salas vivas (open/armed/running). Para o papel viewer o servidor devolve `activeRace: null`. */
+  getRaces(): Promise<RaceRoomsOverviewResponse> {
+    return this.request<RaceRoomsOverviewResponse>('/races', { method: 'GET' });
+  }
+
+  /**
+   * Mesma rota de `getRace`, mas com o DTO que o servidor devolve para o papel viewer: líder e
+   * delta na perspectiva neutra, sem `me`/`opponent`.
+   */
+  getSpectatorRace(raceId: string): Promise<RaceSpectatorStateResponse> {
+    return this.request<RaceSpectatorStateResponse>(
+      `/races/${encodeURIComponent(raceId)}`,
+      { method: 'GET' }
+    );
   }
 
   /** Publica os segmentos do .lss carregado; o backend define ou valida a lista da sala. */

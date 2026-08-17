@@ -1,0 +1,64 @@
+:root {
+  color-scheme: dark;
+  --font-family: "Segoe UI", sans-serif;
+  --time-font-family: Consolas, monospace;
+  --font-weight: 700;
+  --time-font-weight: 800;
+  --name-font-size: 20px;
+  --delta-font-size: 30px;
+  --padding: 10px;
+  --border-radius: 0px;
+  --bg: rgba(0, 0, 0, .88);
+  --edge: rgba(255, 255, 255, .2);
+  --border-width: 1px;
+  --text: #f2f2f2;
+  --muted: #b8b8b8;
+  --ahead: #39d353;
+  --behind: #e05252;
+  font-family: var(--font-family);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: transparent; color: var(--text); overflow: hidden; }
+button { font: inherit; color: inherit; }
+.viewer-overlay {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%; height: 100%; padding: var(--padding);
+  background: var(--bg); border: var(--border-width) solid var(--edge);
+  border-radius: var(--border-radius); color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* Sobreposta em vez de ocupar uma linha do grid: mostrar ou esconder a barra não pode
+   deslocar o líder e o delta durante uma corrida. */
+.drag-bar {
+  position: absolute; inset: 0 0 auto 0;
+  display: flex; align-items: center; gap: 6px; height: 20px;
+  visibility: hidden; opacity: 0; pointer-events: none;
+  transition: opacity 140ms ease, visibility 0s linear 140ms;
+}
+.viewer-overlay.drag-controls-visible .drag-bar {
+  visibility: visible; opacity: 1; pointer-events: auto; transition-delay: 0s;
+}
+.drag-handle { flex: 1; height: 100%; background: linear-gradient(180deg, rgba(255,255,255,.14), transparent); -webkit-app-region: drag; }
+.chip { height: 20px; padding: 0 8px; border: 1px solid var(--edge); border-radius: 3px; background: rgba(20,20,20,.9); font-size: 10px; font-weight: 700; cursor: pointer; -webkit-app-region: no-drag; }
+.chip:hover { background: rgba(255,255,255,.12); }
+.chip.danger { color: #ff9d9d; }
+.viewer-line { display: flex; align-items: baseline; gap: 16px; width: 100%; min-width: 0; }
+.align-spread .viewer-line { justify-content: space-between; }
+.align-left .viewer-line { justify-content: flex-start; }
+.align-center .viewer-line { justify-content: center; }
+.align-right .viewer-line { justify-content: flex-end; }
+.viewer-leader {
+  min-width: 0; overflow: hidden;
+  color: var(--text);
+  font: var(--font-weight) var(--name-font-size)/1.1 var(--font-family);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.viewer-delta {
+  color: var(--muted);
+  font: var(--time-font-weight) var(--delta-font-size)/1 var(--time-font-family);
+  white-space: nowrap;
+}
+.viewer-delta.ahead { color: var(--ahead); }
+.viewer-delta.behind { color: var(--behind); }

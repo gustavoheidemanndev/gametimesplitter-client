@@ -57,6 +57,18 @@ const applicationMessageKeys = new Map([
   ['O .lss não informa a categoria.', 'warning.lssNoCategory'],
   ['O .lss não possui segmentos.', 'warning.lssNoSegments'],
   ['Nenhuma tentativa finalizada foi encontrada em <AttemptHistory>.', 'warning.lssNoAttempts'],
+  ['Assistindo à corrida selecionada.', 'event.viewerWatching'],
+  ['Você parou de assistir à corrida.', 'event.viewerStoppedWatching'],
+  ['A corrida assistida foi encerrada.', 'event.viewerRaceEnded'],
+  ['Overlay de espectador aberta.', 'event.viewerOverlayOpened'],
+  ['Overlay de espectador fechada.', 'event.viewerOverlayClosed'],
+  ['Lista de salas de corrida atualizada.', 'event.viewerRoomsUpdated'],
+  ['A corrida ainda não começou.', 'error.viewerNotStarted'],
+  ['A corrida não está mais em andamento.', 'error.viewerNoLongerRunning'],
+  ['O modo espectador não está ativo.', 'error.viewerInactive'],
+  ['Esta ação está disponível apenas para contas espectadoras.', 'error.viewerOnly'],
+  ['Faça login para assistir a uma corrida.', 'error.viewerSignIn'],
+  ['Identificador da sala de corrida inválido.', 'error.viewerInvalidRoom'],
   ['Escolha de finalização inválida.', 'error.finishInvalid'],
   ['A run ainda não foi finalizada.', 'error.runNotFinished'],
   ['Esta run ainda não possui um arquivo para sobrescrever. Salve em um novo arquivo.', 'error.noOverwriteFile'],
@@ -287,9 +299,15 @@ const renderTimer = (nextTimerState) => {
 
 const updateState = (nextState) => {
   state = nextState;
-  const appAvailable = state.authenticated || state.offlineMode;
-  byId('login-view').classList.toggle('hidden', appAvailable);
+  // O papel `viewer` troca a interface inteira: nada de timer, .lss, jogo do servidor ou
+  // editor de layout do runner.
+  const viewerActive = Boolean(state.viewer?.active);
+  const signedIn = state.authenticated || state.offlineMode;
+  const appAvailable = signedIn && !viewerActive;
+  byId('login-view').classList.toggle('hidden', signedIn);
   byId('app-view').classList.toggle('hidden', !appAvailable);
+  byId('viewer-view').classList.toggle('hidden', !viewerActive);
+  if (viewerActive) renderViewerMode(state.viewer);
   byId('connection-badge').textContent = state.authenticated
     ? t('connection.authenticated')
     : state.offlineMode ? t('connection.offline') : t('connection.disconnected');
@@ -515,7 +533,8 @@ byId('login-form').addEventListener('submit', async (event) => {
     if (!result.success) throw new Error(result.message);
     byId('password').value = '';
     updateState(await bridge.getState());
-    await Promise.all([loadGames(), loadCloudLssFiles()]);
+    // Espectador não associa jogo nem carrega .lss: esses painéis nem são montados para ele.
+    if (!state?.viewer?.active) await Promise.all([loadGames(), loadCloudLssFiles()]);
     addLog(t('log.login.success'));
     if (result.warning) addLog(localizeApplicationMessage(result.warning), true);
     if (result.offlineSyncConfirmed) {
@@ -827,7 +846,9 @@ const applyThemeToInputs = (theme) => {
     });
     const language = byId('theme-language');
     if (language) language.value = theme.language || 'en';
-    i18n.setLanguage(theme.language || 'en');
+    // No modo espectador o idioma vem do tema local do espectador; os dois temas coexistem no
+    // mesmo processo e apenas o da interface visível decide o idioma.
+    if (!state?.viewer?.active) i18n.setLanguage(theme.language || 'en');
     const alignment = byId('theme-timeAlignment');
     if (alignment) alignment.value = theme.timeAlignment;
     const orientation = byId('theme-layoutOrientation');
@@ -942,7 +963,8 @@ const runImmediateThemeMutation = async (mutation) => {
 };
 
 const bindThemeControls = () => {
-  document.querySelectorAll('.theme-grid input, .theme-grid select:not(#theme-preset), .theme-toggles input')
+  // Escopado ao app-view: a aparência da overlay de espectador tem grade própria e store próprio.
+  document.querySelectorAll('#app-view .theme-grid input, #app-view .theme-grid select:not(#theme-preset), #app-view .theme-toggles input')
     .forEach((element) => {
       const type = element.type;
       const eventName = (type === 'range' || type === 'color') ? 'input' : 'change';
@@ -1014,6 +1036,261 @@ const initTheme = async () => {
   }
 };
 
+let viewerRooms = [];
+let viewerWatchingRaceId = null;
+let viewerOverlayOpen = false;
+const viewerTheme = { current: null, applying: false, timer: null, revision: 0, bound: false };
+
+const viewerNumericFields = [
+  'fontWeight', 'timeFontWeight', 'nameFontSize', 'deltaFontSize',
+  'padding', 'borderRadius', 'borderWidth',
+];
+const viewerColorFields = [
+  'backgroundColor', 'borderColor', 'textColor', 'mutedColor', 'aheadColor', 'behindColor',
+];
+const viewerBooleanFields = ['compactTime'];
+
+const viewerRoomTitle = (room) => room.name?.trim() || t('viewer.unnamedRoom');
+
+const viewerRoomMeta = (room) => {
+  const game = [room.gameName, room.gameCategory].filter(Boolean).join(' — ');
+  const host = t('viewer.host', { username: room.hostUsername || t('viewer.unknownHost') });
+  const players = room.participantUsernames.length
+    ? room.participantUsernames.join(', ')
+    : t('viewer.noParticipants');
+  const count = `${i18n.formatNumber(room.participantCount)}/${i18n.formatNumber(room.maxParticipants)}`;
+  return `${game} · ${host} · ${players} (${count})`;
+};
+
+const watchViewerRoom = async (raceId, button) => {
+  button.disabled = true;
+  try {
+    updateState(await bridge.watchViewerRace(raceId));
+    addLog(t('log.viewer.watching'));
+  } catch (error) {
+    addLog(t('log.viewer.watchFailed', { error: errorMessage(error) }), true);
+    renderViewerRooms();
+  }
+};
+
+const renderViewerRooms = () => {
+  const list = byId('viewer-rooms');
+  if (!list) return;
+  list.replaceChildren();
+  if (!viewerRooms.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = t('viewer.emptyRooms');
+    list.append(empty);
+    return;
+  }
+
+  viewerRooms.forEach((room) => {
+    const item = document.createElement('li');
+    const watching = room.id === viewerWatchingRaceId;
+    if (watching) item.classList.add('watching');
+
+    const info = document.createElement('div');
+    info.className = 'viewer-room-info';
+    const name = document.createElement('strong');
+    name.className = 'viewer-room-name';
+    name.textContent = viewerRoomTitle(room);
+    const meta = document.createElement('span');
+    meta.className = 'viewer-room-meta';
+    meta.textContent = viewerRoomMeta(room);
+    info.append(name, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'viewer-room-actions';
+    const status = document.createElement('span');
+    status.className = `viewer-room-status ${room.status}`;
+    status.textContent = t(`viewer.status.${room.status}`);
+    const watch = document.createElement('button');
+    watch.type = 'button';
+    watch.className = watching ? 'secondary' : '';
+    // Sala aberta ou armada continua listada, mas sem ação: só corrida em andamento tem delta.
+    watch.textContent = watching ? t('viewer.watching') : t('viewer.watch');
+    watch.disabled = !room.canWatch || watching;
+    if (!room.canWatch) watch.title = t('viewer.notStarted');
+    watch.addEventListener('click', () => void watchViewerRoom(room.id, watch));
+    actions.append(status, watch);
+
+    item.append(info, actions);
+    list.append(item);
+  });
+};
+
+const renderViewerWatchStatus = () => {
+  const watched = viewerRooms.find((room) => room.id === viewerWatchingRaceId);
+  byId('viewer-watch-status').textContent = viewerWatchingRaceId
+    ? t('viewer.watchingRoom', { room: watched ? viewerRoomTitle(watched) : t('viewer.unnamedRoom') })
+    : t('viewer.notWatching');
+  byId('viewer-stop-watch').disabled = !viewerWatchingRaceId;
+  byId('viewer-toggle-overlay').textContent = viewerOverlayOpen
+    ? t('viewer.closeOverlay')
+    : t('viewer.openOverlay');
+};
+
+const renderViewerMode = (viewer) => {
+  byId('viewer-user-name').textContent = state?.user?.username ?? '';
+  byId('viewer-user-email').textContent = state?.user?.email ?? '';
+  viewerRooms = Array.isArray(viewer?.rooms) ? viewer.rooms : [];
+  viewerWatchingRaceId = viewer?.watchingRaceId ?? null;
+  viewerOverlayOpen = Boolean(viewer?.overlayOpen);
+  renderViewerRooms();
+  renderViewerWatchStatus();
+  void initViewerTheme();
+};
+
+const applyViewerThemeToInputs = (theme) => {
+  viewerTheme.applying = true;
+  try {
+    overlayFontCatalog?.ensure();
+    populateFontSelect('viewer-theme-fontFamily', theme.fontFamily);
+    populateFontSelect('viewer-theme-timeFontFamily', theme.timeFontFamily);
+    viewerNumericFields.forEach((field) => {
+      const input = byId(`viewer-theme-${field}`);
+      if (input) input.value = String(theme[field]);
+    });
+    viewerColorFields.forEach((field) => {
+      const input = byId(`viewer-theme-${field}`);
+      if (input) input.value = theme[field];
+    });
+    viewerBooleanFields.forEach((field) => {
+      const input = byId(`viewer-theme-${field}`);
+      if (input) input.checked = Boolean(theme[field]);
+    });
+    const opacity = byId('viewer-theme-backgroundOpacity');
+    if (opacity) opacity.value = String(Math.round(theme.backgroundOpacity * 100));
+    const alignment = byId('viewer-theme-alignment');
+    if (alignment) alignment.value = theme.alignment || 'spread';
+    const language = byId('viewer-theme-language');
+    if (language) language.value = theme.language || 'en';
+    if (state?.viewer?.active) i18n.setLanguage(theme.language || 'en');
+    refreshViewerValueLabels();
+  } finally {
+    viewerTheme.applying = false;
+  }
+};
+
+const refreshViewerValueLabels = () => {
+  document.querySelectorAll('#viewer-view [data-value-for]').forEach((element) => {
+    const source = byId(element.dataset.valueFor);
+    if (source) element.textContent = source.value;
+  });
+};
+
+const collectViewerThemeFromInputs = () => {
+  const partial = {};
+  viewerNumericFields.forEach((field) => {
+    const input = byId(`viewer-theme-${field}`);
+    if (input) partial[field] = Number(input.value);
+  });
+  viewerColorFields.forEach((field) => {
+    const input = byId(`viewer-theme-${field}`);
+    if (input) partial[field] = input.value;
+  });
+  viewerBooleanFields.forEach((field) => {
+    const input = byId(`viewer-theme-${field}`);
+    if (input) partial[field] = input.checked;
+  });
+  const opacity = byId('viewer-theme-backgroundOpacity');
+  if (opacity) partial.backgroundOpacity = Number(opacity.value) / 100;
+  const fontFamily = byId('viewer-theme-fontFamily');
+  if (fontFamily) partial.fontFamily = fontFamily.value;
+  const timeFontFamily = byId('viewer-theme-timeFontFamily');
+  if (timeFontFamily) partial.timeFontFamily = timeFontFamily.value;
+  const alignment = byId('viewer-theme-alignment');
+  if (alignment) partial.alignment = alignment.value;
+  const language = byId('viewer-theme-language');
+  if (language) partial.language = language.value;
+  return partial;
+};
+
+const scheduleViewerThemeUpdate = () => {
+  if (viewerTheme.applying) return;
+  refreshViewerValueLabels();
+  if (viewerTheme.timer) clearTimeout(viewerTheme.timer);
+  const revision = ++viewerTheme.revision;
+  viewerTheme.timer = setTimeout(async () => {
+    viewerTheme.timer = null;
+    try {
+      const updated = await bridge.updateViewerOverlayTheme(collectViewerThemeFromInputs());
+      if (revision === viewerTheme.revision) viewerTheme.current = updated;
+    } catch (error) {
+      addLog(t('log.viewer.themeSaveFailed', { error: errorMessage(error) }), true);
+    }
+  }, 150);
+};
+
+const bindViewerThemeControls = () => {
+  document.querySelectorAll('.viewer-theme-grid input, .viewer-theme-grid select, .viewer-theme-toggles input')
+    .forEach((element) => {
+      const eventName = (element.type === 'range' || element.type === 'color') ? 'input' : 'change';
+      element.addEventListener(eventName, scheduleViewerThemeUpdate);
+    });
+  byId('viewer-theme-language').addEventListener('change', (event) => {
+    if (viewerTheme.current) viewerTheme.current = { ...viewerTheme.current, language: event.target.value };
+    i18n.setLanguage(event.target.value);
+  });
+  byId('viewer-theme-reset').addEventListener('click', async () => {
+    if (viewerTheme.timer) clearTimeout(viewerTheme.timer);
+    viewerTheme.timer = null;
+    const revision = ++viewerTheme.revision;
+    try {
+      const theme = await bridge.resetViewerOverlayTheme();
+      if (revision === viewerTheme.revision) {
+        viewerTheme.current = theme;
+        applyViewerThemeToInputs(theme);
+      }
+      addLog(t('log.viewer.themeReset'));
+    } catch (error) {
+      addLog(t('log.viewer.themeResetFailed', { error: errorMessage(error) }), true);
+    }
+  });
+};
+
+/** Idempotente: o modo espectador pode ser montado no boot ou logo após um login. */
+const initViewerTheme = async () => {
+  if (viewerTheme.bound) return;
+  viewerTheme.bound = true;
+  try {
+    const theme = await bridge.getViewerOverlayTheme();
+    viewerTheme.current = theme;
+    applyViewerThemeToInputs(theme);
+    bindViewerThemeControls();
+  } catch (error) {
+    viewerTheme.bound = false;
+    addLog(t('log.viewer.themeLoadFailed', { error: errorMessage(error) }), true);
+  }
+};
+
+byId('viewer-logout').addEventListener('click', async () => {
+  cancelScheduledThemeUpdate();
+  await bridge.logout();
+  updateState(await bridge.getState());
+  addLog(t('log.logout.done'));
+});
+
+byId('viewer-stop-watch').addEventListener('click', async () => {
+  try {
+    updateState(await bridge.stopWatchingViewerRace());
+    addLog(t('log.viewer.stoppedWatching'));
+  } catch (error) {
+    addLog(t('log.viewer.stopFailed', { error: errorMessage(error) }), true);
+  }
+});
+
+byId('viewer-toggle-overlay').addEventListener('click', async () => {
+  try {
+    const isOpen = await bridge.toggleViewerOverlay();
+    addLog(t(isOpen ? 'log.viewer.overlayOpened' : 'log.viewer.overlayClosed'));
+    updateState(await bridge.getState());
+  } catch (error) {
+    addLog(t('log.viewer.overlayFailed', { error: errorMessage(error) }), true);
+  }
+});
+
 byId('start-monitor').addEventListener('click', async () => {
   const gameId = byId('game-select').value;
   if (!selectedFile) return addLog(t('log.monitor.fileFirst'), true);
@@ -1059,6 +1336,31 @@ byId('update-install').addEventListener('click', async () => {
 });
 
 bridge.onEvent((event) => {
+  // Eventos do espectador não vão para a atividade: a lista é atualizada a cada 2 s.
+  if (event.type === 'viewer-rooms') {
+    viewerRooms = Array.isArray(event.data) ? event.data : [];
+    if (state?.viewer) state.viewer.rooms = viewerRooms;
+    renderViewerRooms();
+    renderViewerWatchStatus();
+    return;
+  }
+  if (event.type === 'viewer-overlay-state') {
+    viewerWatchingRaceId = event.data?.raceId ?? null;
+    if (state?.viewer) {
+      state.viewer.overlay = event.data ?? null;
+      state.viewer.watchingRaceId = viewerWatchingRaceId;
+    }
+    renderViewerRooms();
+    renderViewerWatchStatus();
+    return;
+  }
+  if (event.type === 'viewer-overlay-theme' && event.data) {
+    if (!viewerTheme.timer) {
+      viewerTheme.current = event.data;
+      applyViewerThemeToInputs(event.data);
+    }
+    return;
+  }
   if (event.type === 'timer-state' && event.data) {
     if (state) state.timer = event.data;
     renderTimer(event.data);
@@ -1100,6 +1402,16 @@ window.addEventListener('gts-language-change', () => {
   if (state) updateState(state);
   else if (timerState) renderTimer(timerState);
   renderLayoutEditor();
+  if (viewerTheme.current) {
+    const applying = viewerTheme.applying;
+    viewerTheme.applying = true;
+    try {
+      populateFontSelect('viewer-theme-fontFamily', viewerTheme.current.fontFamily);
+      populateFontSelect('viewer-theme-timeFontFamily', viewerTheme.current.timeFontFamily);
+    } finally {
+      viewerTheme.applying = applying;
+    }
+  }
   if (cloudStatus.raw) byId('cloud-lss-status').textContent = cloudStatus.raw;
   else setCloudStatus(cloudStatus.key, cloudStatus.params);
 
@@ -1156,7 +1468,9 @@ window.addEventListener('gts-language-change', () => {
     i18n.applyToDocument();
     updateState(await bridge.getState());
     await initTheme();
-    if (state.authenticated) await Promise.all([loadGames(), loadCloudLssFiles()]);
+    if (state.authenticated && !state.viewer?.active) {
+      await Promise.all([loadGames(), loadCloudLssFiles()]);
+    }
   } catch (error) {
     addLog(t('log.app.failed', { error: errorMessage(error) }), true);
   }

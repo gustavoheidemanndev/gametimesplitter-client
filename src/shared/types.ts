@@ -139,6 +139,69 @@ export interface RaceStateResponse {
   serverTime: string;
 }
 
+/** Item de `GET /races` → `rooms`. Campos de participante (`isMine`, `canJoin`) vêm falsos para viewer. */
+export interface RaceRoomSummaryResponse {
+  id: string;
+  name: string | null;
+  status: RaceRoomStatus;
+  revision: number;
+  game: { id: string; name: string; category: string };
+  splitCount: number | null;
+  maxParticipants: number;
+  participantCount: number;
+  host: { userId: string; username: string };
+  participants: Array<{
+    userId: string;
+    username: string;
+    status: RaceParticipantStatus;
+    clientConnected: boolean;
+    isReady: boolean;
+  }>;
+  isMine: boolean;
+  canJoin: boolean;
+  createdAt: string;
+}
+
+/** Resposta de `GET /races`. `activeRace` é sempre null para o papel viewer. */
+export interface RaceRoomsOverviewResponse {
+  rooms: RaceRoomSummaryResponse[];
+  activeRace: RaceStateResponse | null;
+}
+
+/**
+ * Resposta de `GET /races/:id` para o papel viewer: sem `me`/`opponent`, com líder e delta
+ * já calculados pelo servidor na perspectiva neutra descrita em docs/VIEWER_ASSISTIR_RACES.md.
+ */
+export interface RaceSpectatorStateResponse {
+  id: string;
+  name: string | null;
+  status: RaceRoomStatus;
+  revision: number;
+  game: { id: string; name: string; category: string };
+  splitCount: number | null;
+  maxParticipants: number;
+  host: { userId: string; username: string };
+  participants: Array<{
+    participantId: string;
+    userId: string;
+    username: string;
+    status: RaceParticipantStatus;
+    completedSplits: number;
+  }>;
+  spectator: {
+    commonSplitOrder: number;
+    leaderUsername: string | null;
+    leaderParticipantId: string | null;
+    /** Negativo = o líder está na frente. null enquanto não houver split comum. */
+    deltaMs: number | null;
+  };
+  winnerId: string | null;
+  armedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  serverTime: string;
+}
+
 export interface RaceSplitPayload {
   order: number;
   splitTime: number;
@@ -169,6 +232,43 @@ export interface RaceOverlayState {
   /** O timer foi resetado no meio da corrida e ela não pode mais ser concluída. */
   attemptInvalidated: boolean;
   isWinner: boolean | null;
+}
+
+/** Sala da lista do modo espectador, já reduzida para o que a interface desenha. */
+export interface ViewerRoomView {
+  id: string;
+  name: string | null;
+  status: RaceRoomStatus;
+  gameName: string;
+  gameCategory: string;
+  hostUsername: string;
+  participantUsernames: string[];
+  participantCount: number;
+  maxParticipants: number;
+  /** Só corrida em andamento pode ser assistida (§4.2 do documento da feature). */
+  canWatch: boolean;
+}
+
+/**
+ * Estado da sala assistida já reduzido para a perspectiva do líder. É o que a overlay de
+ * espectador consome: o renderer não contém regra de negócio de corrida.
+ */
+export interface ViewerOverlayState {
+  raceId: string;
+  status: RaceRoomStatus;
+  leaderUsername: string | null;
+  /** Negativo = o líder está na frente. null enquanto não houver split comum. */
+  deltaMs: number | null;
+  commonSplitOrder: number;
+}
+
+export interface ViewerState {
+  /** `true` quando a conta autenticada tem papel `viewer`. */
+  active: boolean;
+  rooms: ViewerRoomView[];
+  watchingRaceId: string | null;
+  overlay: ViewerOverlayState | null;
+  overlayOpen: boolean;
 }
 
 export interface ParsedLss {
@@ -231,6 +331,8 @@ export interface AppState {
   overlayClickThrough: boolean;
   /** A overlay pode ser aberta no meio de uma corrida, então o estado vem também no boot. */
   race: RaceOverlayState | null;
+  /** Modo espectador: `active` false para runner, support e admin. */
+  viewer: ViewerState;
   update: AppUpdateStatus;
 }
 
@@ -246,7 +348,7 @@ export interface LoginRequest {
 }
 
 export interface DesktopEvent {
-  type: 'state' | 'file-read' | 'sync' | 'error' | 'auth-expired' | 'timer-state' | 'sidecar' | 'overlay-theme' | 'overlay-click-through' | 'race-state' | 'update';
+  type: 'state' | 'file-read' | 'sync' | 'error' | 'auth-expired' | 'timer-state' | 'sidecar' | 'overlay-theme' | 'overlay-click-through' | 'race-state' | 'viewer-rooms' | 'viewer-overlay-state' | 'viewer-overlay-theme' | 'update';
   message: string;
   data?: unknown;
 }

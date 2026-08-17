@@ -11,6 +11,8 @@ import type {
   RaceOverlayState,
   RunProgressPayload,
   RunSplitPayload,
+  ViewerOverlayState,
+  ViewerRoomView,
 } from '../shared/types';
 import type {
   FinishTimerRequest,
@@ -33,20 +35,26 @@ import { RaceSync } from './services/race-sync';
 import { SessionStore } from './services/session-store';
 import { OFFLINE_QUEUE_OWNER_ID, SyncQueue } from './services/sync-queue';
 import { TimerSidecar, unavailableTimerState } from './services/timer-sidecar';
+import { ViewerOverlayThemeStore } from './services/viewer-overlay-theme-store';
+import { ViewerRaceSync } from './services/viewer-race-sync';
 import {
   applyOverlayThemePreset,
   defaultOverlayTheme,
   overlayThemePresets,
   type OverlayTheme,
 } from '../shared/overlay-theme';
+import type { ViewerOverlayTheme } from '../shared/viewer-overlay-theme';
 
 let mainWindow: BrowserWindow | undefined;
 let overlayWindow: BrowserWindow | undefined;
+let viewerOverlayWindow: BrowserWindow | undefined;
 let store: SessionStore;
 let cloudLssStore: CloudLssStore;
 let overlayThemeStore: OverlayThemeStore;
 let overlayThemeSync: OverlayThemeSync;
+let viewerOverlayThemeStore: ViewerOverlayThemeStore;
 let raceSync: RaceSync | undefined;
+let viewerRaceSync: ViewerRaceSync | undefined;
 let api: ApiClient;
 let queue: SyncQueue;
 let monitor: LssMonitor;
@@ -100,7 +108,13 @@ const getAppIconPath = (): string => app.isPackaged
 const sendEvent = (event: DesktopEvent): void => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:event', event);
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('desktop:event', event);
+  if (viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()) {
+    viewerOverlayWindow.webContents.send('desktop:event', event);
+  }
 };
+
+/** O modo espectador é exclusivo do papel `viewer`: staff e runner seguem na interface normal. */
+const isViewerSession = (): boolean => api?.getSession()?.user.role === 'viewer';
 
 // Não depende de sessão nem de arquivo local, então pode existir desde a carga do módulo.
 const appUpdater = new AppUpdater({
@@ -123,6 +137,13 @@ const getState = (): AppState => ({
   overlayOpen: Boolean(overlayWindow && !overlayWindow.isDestroyed()),
   overlayClickThrough,
   race: raceSync?.getOverlayState() ?? null,
+  viewer: {
+    active: isViewerSession(),
+    rooms: viewerRaceSync?.getRooms() ?? [],
+    watchingRaceId: viewerRaceSync?.getWatchingRaceId() ?? null,
+    overlay: viewerRaceSync?.getOverlayState() ?? null,
+    overlayOpen: Boolean(viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()),
+  },
   update: appUpdater.getStatus(),
 });
 
@@ -308,6 +329,30 @@ const broadcastRaceState = (race: RaceOverlayState | null): void => {
     type: 'race-state',
     message: race ? 'Estado da corrida atualizado.' : 'Nenhuma corrida ativa.',
     data: race,
+  });
+};
+
+const broadcastViewerRooms = (rooms: ViewerRoomView[]): void => {
+  sendEvent({
+    type: 'viewer-rooms',
+    message: 'Lista de salas de corrida atualizada.',
+    data: rooms,
+  });
+};
+
+const broadcastViewerOverlayState = (state: ViewerOverlayState | null): void => {
+  sendEvent({
+    type: 'viewer-overlay-state',
+    message: state ? 'Corrida assistida atualizada.' : 'Nenhuma corrida sendo assistida.',
+    data: state,
+  });
+};
+
+const broadcastViewerTheme = (theme: ViewerOverlayTheme): void => {
+  sendEvent({
+    type: 'viewer-overlay-theme',
+    message: 'Tema da overlay de espectador atualizado.',
+    data: theme,
   });
 };
 
@@ -661,6 +706,80 @@ const createOverlayWindow = (): BrowserWindow => {
   return overlayWindow;
 };
 
+/**
+ * Janela dedicada ao espectador. Separada da overlay do runner de propósito: ela não tem timer,
+ * splits nem painel de finalização, e o tema dela vive em outro arquivo local.
+ */
+const createViewerOverlayWindow = (): BrowserWindow => {
+  if (viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()) {
+    viewerOverlayWindow.show();
+    viewerOverlayWindow.focus();
+    return viewerOverlayWindow;
+  }
+
+  viewerOverlayWindow = new BrowserWindow({
+    width: 420,
+    height: 96,
+    minWidth: 200,
+    minHeight: 64,
+    title: 'Game Time Splitter - Viewer Overlay',
+    icon: getAppIconPath(),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: true,
+    skipTaskbar: false,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  viewerOverlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  viewerOverlayWindow.setMenuBarVisibility(false);
+  viewerOverlayWindow.once('ready-to-show', () => viewerOverlayWindow?.show());
+  viewerOverlayWindow.on('closed', () => {
+    viewerOverlayWindow = undefined;
+    sendState('Overlay de espectador fechada.');
+  });
+  void viewerOverlayWindow.loadFile(path.join(app.getAppPath(), 'src', 'renderer', 'viewer-overlay.html'));
+  return viewerOverlayWindow;
+};
+
+const closeViewerOverlayWindow = (): void => {
+  if (viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()) viewerOverlayWindow.close();
+};
+
+/**
+ * Aplica o papel da sessão às duas sincronizações de corrida. Como só existe um poll de cada
+ * lado, sair do papel `viewer` (logout ou troca de conta) também fecha a overlay de espectador.
+ */
+const applySessionRole = (): void => {
+  const viewer = isViewerSession();
+  raceSync?.setParticipantMode(!viewer);
+  viewerRaceSync?.setActive(viewer);
+  if (!viewer) closeViewerOverlayWindow();
+};
+
+const requireViewerSession = (): ViewerRaceSync => {
+  if (!isViewerSession() || !viewerRaceSync) {
+    throw new Error('Esta ação está disponível apenas para contas espectadoras.');
+  }
+  return viewerRaceSync;
+};
+
+const normalizeRaceId = (value: unknown): string => {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value)) {
+    throw new Error('Identificador da sala de corrida inválido.');
+  }
+  return value;
+};
+
 const timerPreventsFileSwap = (): boolean =>
   timerState.available && (timerState.phase === 'running' || timerState.phase === 'paused' || timerState.phase === 'ended');
 
@@ -712,6 +831,9 @@ const registerIpcHandlers = (): void => {
         throw new Error('A sessão mudou antes de concluir o carregamento do tema.');
       }
       overlayThemeSync.handleSessionChange(true);
+      // Antes do handleSessionChange do participante: uma conta viewer não deve chegar a
+      // consultar /races/active nem uma vez.
+      applySessionRole();
       raceSync?.handleSessionChange(true);
       await store.saveSession(session, request.remember);
       await store.savePreferences(selectedFile, store.getSelectedGameId());
@@ -793,6 +915,8 @@ const registerIpcHandlers = (): void => {
     if (hadSession) {
       stopAutomaticMonitoring();
       raceSync?.handleSessionChange(false);
+      viewerRaceSync?.setActive(false);
+      closeViewerOverlayWindow();
       await timerProgressChain;
       await api.logout();
       await queue.loadOffline();
@@ -968,6 +1092,57 @@ const registerIpcHandlers = (): void => {
     return theme;
   });
   ipcMain.handle('overlay:list-presets', () => Object.keys(overlayThemePresets));
+  ipcMain.handle('viewer:get-rooms', () => viewerRaceSync?.getRooms() ?? []);
+  ipcMain.handle('viewer:refresh-rooms', async () => {
+    const sync = requireViewerSession();
+    await sync.refresh();
+    return sync.getRooms();
+  });
+  ipcMain.handle('viewer:watch', async (_event, rawRaceId: unknown) => {
+    const sync = requireViewerSession();
+    const raceId = normalizeRaceId(rawRaceId);
+    await sync.watch(raceId);
+    createViewerOverlayWindow();
+    sendState('Assistindo à corrida selecionada.');
+    return getState();
+  });
+  ipcMain.handle('viewer:stop-watch', () => {
+    requireViewerSession().stopWatching();
+    sendState('Você parou de assistir à corrida.');
+    return getState();
+  });
+  ipcMain.handle('viewer:get-overlay-state', () => viewerRaceSync?.getOverlayState() ?? null);
+  ipcMain.handle('viewer:overlay-open', () => {
+    requireViewerSession();
+    createViewerOverlayWindow();
+    sendState('Overlay de espectador aberta.');
+    return true;
+  });
+  ipcMain.handle('viewer:overlay-close', () => {
+    closeViewerOverlayWindow();
+    return true;
+  });
+  ipcMain.handle('viewer:overlay-toggle', () => {
+    if (viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()) {
+      closeViewerOverlayWindow();
+      return false;
+    }
+    requireViewerSession();
+    createViewerOverlayWindow();
+    sendState('Overlay de espectador aberta.');
+    return true;
+  });
+  ipcMain.handle('viewer:get-theme', () => viewerOverlayThemeStore.get());
+  ipcMain.handle('viewer:update-theme', async (_event, partial: Partial<ViewerOverlayTheme> | null) => {
+    const theme = await viewerOverlayThemeStore.update(partial ?? {});
+    broadcastViewerTheme(theme);
+    return theme;
+  });
+  ipcMain.handle('viewer:reset-theme', async () => {
+    const theme = await viewerOverlayThemeStore.reset();
+    broadcastViewerTheme(theme);
+    return theme;
+  });
   ipcMain.handle('update:get-status', () => appUpdater.getStatus());
   ipcMain.handle('update:check', () => appUpdater.checkNow());
   ipcMain.handle('update:install', () => {
@@ -1063,6 +1238,8 @@ const initialize = async (): Promise<void> => {
   const restoredSession = store.restoreSession();
   overlayThemeStore = new OverlayThemeStore();
   await switchOverlayThemeOwner(restoredSession?.user.id);
+  viewerOverlayThemeStore = new ViewerOverlayThemeStore();
+  await viewerOverlayThemeStore.load();
 
   api = new ApiClient((session, reason) => {
     if (session) {
@@ -1071,6 +1248,7 @@ const initialize = async (): Promise<void> => {
         overlayThemeSync?.handleSessionChange(false);
       }
       void store.updateSession(session);
+      applySessionRole();
     } else {
       offlineMode = true;
       progressQueueOwnerId = undefined;
@@ -1079,6 +1257,7 @@ const initialize = async (): Promise<void> => {
       overlayThemeSync?.handleSessionChange(false);
       // Sem sessão viva não existe corrida: o campo da overlay desaparece.
       raceSync?.handleSessionChange(false);
+      applySessionRole();
       // Perder a sessão não pode mudar o visual da overlay no meio de uma live:
       // o tema da conta continua aplicado e só o logout explícito volta ao padrão.
       if (reason === 'logout') void switchOverlayThemeOwner(undefined, 'default');
@@ -1104,6 +1283,17 @@ const initialize = async (): Promise<void> => {
       data: { scope: 'race', isError },
     }),
     getTimerState: () => timerState,
+  });
+
+  viewerRaceSync = new ViewerRaceSync(api, {
+    // Eventos próprios em vez de sendState: a lista muda a cada poll e inundaria a atividade.
+    onRooms: (rooms) => broadcastViewerRooms(rooms),
+    onOverlayState: (viewerState) => broadcastViewerOverlayState(viewerState),
+    onStatus: (message, isError) => sendEvent({
+      type: isError ? 'error' : 'sync',
+      message,
+      data: { scope: 'viewer', isError },
+    }),
   });
 
   overlayThemeSync = new OverlayThemeSync(api, overlayThemeStore, {
@@ -1171,6 +1361,9 @@ const initialize = async (): Promise<void> => {
   appUpdater.start();
   overlayThemeSync.handleSessionChange(Boolean(restoredSession));
   overlayThemeSync.start();
+  // Antes de ligar o poll de participante: uma sessão de viewer restaurada não deve chegar a
+  // consultar /races/active nenhuma vez.
+  applySessionRole();
   raceSync.handleSessionChange(Boolean(restoredSession));
   raceSync.start();
   await initializeSidecar();
@@ -1271,6 +1464,7 @@ const prepareShutdown = async (): Promise<void> => {
   }
   overlayThemeSync?.stop();
   raceSync?.stop();
+  viewerRaceSync?.stop();
   monitor?.stop();
   await timerSidecar?.shutdown();
   appUpdater.stop();

@@ -47,6 +47,18 @@ contextBridge.exposeInMainWorld('gameTimeSpliter', {
   applyOverlayPreset: (name: string, draftId: string) =>
     ipcRenderer.invoke('overlay:apply-preset', { name, draftId }),
   listOverlayPresets: () => ipcRenderer.invoke('overlay:list-presets'),
+  listViewerRooms: () => ipcRenderer.invoke('viewer:get-rooms'),
+  refreshViewerRooms: () => ipcRenderer.invoke('viewer:refresh-rooms'),
+  watchViewerRace: (raceId: string) => ipcRenderer.invoke('viewer:watch', raceId),
+  stopWatchingViewerRace: () => ipcRenderer.invoke('viewer:stop-watch'),
+  getViewerOverlayState: () => ipcRenderer.invoke('viewer:get-overlay-state'),
+  openViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-open'),
+  closeViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-close'),
+  toggleViewerOverlay: () => ipcRenderer.invoke('viewer:overlay-toggle'),
+  getViewerOverlayTheme: () => ipcRenderer.invoke('viewer:get-theme'),
+  updateViewerOverlayTheme: (partial: Record<string, unknown>) =>
+    ipcRenderer.invoke('viewer:update-theme', partial),
+  resetViewerOverlayTheme: () => ipcRenderer.invoke('viewer:reset-theme'),
   getUpdateStatus: () => ipcRenderer.invoke('update:get-status'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),

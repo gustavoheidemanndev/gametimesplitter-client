@@ -123,6 +123,20 @@ code { color: #b9cce4; overflow-wrap: anywhere; }
 .layout-component-row button:disabled { opacity: .3; }
 .layout-help { font-size: 12px; }
 .theme-section-title { margin: 18px 0 0; color: #d4e2f3; font-size: 14px; }
+
+.viewer-rooms { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.viewer-rooms li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #294461; border-radius: 10px; background: #0d1d30; }
+.viewer-rooms li.empty { display: block; color: #7289a8; text-align: center; }
+.viewer-room-info { display: grid; gap: 3px; min-width: 0; }
+.viewer-room-name { overflow: hidden; font-size: 15px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-room-meta { overflow: hidden; color: #86a0bf; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-room-actions { display: flex; align-items: center; gap: 10px; }
+.viewer-room-status { border-radius: 99px; padding: 5px 10px; color: #9bb2cf; background: rgba(86,214,255,.08); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.viewer-room-status.running { color: #76f7be; background: rgba(44,181,126,.14); }
+.viewer-rooms li.watching { border-color: #56d6ff; box-shadow: inset 3px 0 #56d6ff; }
+@media (max-width: 650px) {
+  .viewer-rooms li { grid-template-columns: 1fr; }
+}
 @media (max-width: 760px) {
   .layout-editor-toolbar { grid-template-columns: 1fr; }
   .layout-component-row { grid-template-columns: 26px 1fr repeat(4, 32px); }
