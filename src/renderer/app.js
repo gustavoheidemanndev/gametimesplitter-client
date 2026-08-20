@@ -1080,9 +1080,11 @@ const pushViewerTestPreview = async ({ announce = false } = {}) => {
   if (!nick) throw new Error(t('error.viewer.testNick'));
   const deltaMs = parseViewerTestDeltaSeconds(byId('viewer-test-delta')?.value);
   if (deltaMs === null) throw new Error(t('error.viewer.testDelta'));
+  const overlayWasOpen = viewerOverlayOpen;
   await bridge.setViewerOverlayPreview({ leaderUsername: nick, deltaMs });
   if (announce) addLog(t('log.viewer.testModeOn'));
-  updateState(await bridge.getState());
+  // Digitar no nick/delta não pode re-renderizar a tela: o foco do campo cairia a cada tecla.
+  if (announce || !overlayWasOpen) updateState(await bridge.getState());
 };
 
 const scheduleViewerTestPreview = () => {

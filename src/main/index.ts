@@ -723,11 +723,17 @@ const createOverlayWindow = (): BrowserWindow => {
 /**
  * Janela dedicada ao espectador. Separada da overlay do runner de propósito: ela não tem timer,
  * splits nem painel de finalização, e o tema dela vive em outro arquivo local.
+ *
+ * `focus: false` abre ou atualiza a janela sem roubar o teclado da janela principal — necessário
+ * no modo teste, em que cada tecla no nick/delta republica o preview.
  */
-const createViewerOverlayWindow = (): BrowserWindow => {
+const createViewerOverlayWindow = (options?: { focus?: boolean }): BrowserWindow => {
+  const focus = options?.focus !== false;
   if (viewerOverlayWindow && !viewerOverlayWindow.isDestroyed()) {
-    viewerOverlayWindow.show();
-    viewerOverlayWindow.focus();
+    if (focus) {
+      viewerOverlayWindow.show();
+      viewerOverlayWindow.focus();
+    }
     return viewerOverlayWindow;
   }
 
@@ -756,7 +762,10 @@ const createViewerOverlayWindow = (): BrowserWindow => {
 
   viewerOverlayWindow.setAlwaysOnTop(true, 'screen-saver');
   viewerOverlayWindow.setMenuBarVisibility(false);
-  viewerOverlayWindow.once('ready-to-show', () => viewerOverlayWindow?.show());
+  viewerOverlayWindow.once('ready-to-show', () => {
+    if (focus) viewerOverlayWindow?.show();
+    else viewerOverlayWindow?.showInactive();
+  });
   viewerOverlayWindow.on('closed', () => {
     viewerOverlayWindow = undefined;
     sendState('Overlay de espectador fechada.');
@@ -1147,7 +1156,7 @@ const registerIpcHandlers = (): void => {
     if (!leaderUsername || deltaMs === null) {
       throw new Error('Informe um nick e um delta numéricos para o modo teste.');
     }
-    createViewerOverlayWindow();
+    createViewerOverlayWindow({ focus: false });
     return setViewerOverlayPreview({
       raceId: 'preview',
       status: 'running',
